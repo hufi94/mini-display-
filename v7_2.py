@@ -1,17 +1,18 @@
-# Cyberpunk Dashboard – PCB v7.3 (bottom-left GIF widget integration)
+# Cyberpunk Dashboard – PCB v7.3 (Civic GIF integration + loop)
 import sys, random, datetime
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QGraphicsDropShadowEffect
 from PyQt5.QtCore import Qt, QTimer, QPointF
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPainterPath, QMovie
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 # TUNABLES
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 WIDGET_W, WIDGET_H = 250, 160
 LEFT_X, RIGHT_X_GAP = 40, 40
 TOP_Y, BOTTOM_Y_GAP = 50, 50
 CYAN = QColor("#00ffff")
 PINK = QColor("#ff00ff")
+GRID_COLOR = QColor(30, 30, 30)
 BORDER_WIDTH = 4
 RADIUS = 30
 PADDING = 8
@@ -20,16 +21,14 @@ BUS_OFFS = [-20, -10, 10, 20]
 SPINE_OFFS = [-34, -32, 34, 36]
 BRANCH_OFFSETS = [-13, 13]
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 # Neon helpers
-# ──────────────────────────────────────────────────────────────
-def neon_stroke(p: QPainter, path: QPainterPath, color: QColor, core_width: int):
+# ──────────────────────────────────────────────
+def neon_stroke(p, path, color, core_width):
     c1 = QColor(color); c1.setAlpha(60)
     c2 = QColor(color); c2.setAlpha(120)
     c3 = QColor(color); c3.setAlpha(255)
-    for w, col in ((core_width * 3, c1),
-                   (int(core_width * 1.7), c2),
-                   (core_width, c3)):
+    for w, col in ((core_width*3, c1), (int(core_width*1.7), c2), (core_width, c3)):
         pen = QPen(col)
         pen.setWidth(w)
         pen.setCapStyle(Qt.RoundCap)
@@ -37,16 +36,14 @@ def neon_stroke(p: QPainter, path: QPainterPath, color: QColor, core_width: int)
         p.setPen(pen)
         p.drawPath(path)
 
-
-def neon_dot(p: QPainter, pos: QPointF, color: QColor, radius: int):
+def neon_dot(p, pos, color, radius):
     c1 = QColor(color); c1.setAlpha(60)
     c2 = QColor(color); c2.setAlpha(120)
     c3 = QColor(color); c3.setAlpha(255)
-    for r, col in ((radius * 2, c1), (int(radius * 1.5), c2), (radius, c3)):
+    for r, col in ((radius*2, c1), (int(radius*1.5), c2), (radius, c3)):
         p.setBrush(col)
         p.setPen(Qt.NoPen)
         p.drawEllipse(pos, r, r)
-
 
 def ortho_path(points):
     path = QPainterPath(QPointF(points[0][0], points[0][1]))
@@ -54,58 +51,43 @@ def ortho_path(points):
         path.lineTo(QPointF(x, y))
     return path
 
-# ──────────────────────────────────────────────────────────────
-# Widget (cyan border glow + optional GIF integration)
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# Widget class
+# ──────────────────────────────────────────────
 class GlowWidget(QWidget):
-    def __init__(self, text, parent=None, big=False, gif_path=None):
+    def __init__(self, text="", parent=None, big=False):
         super().__init__(parent)
         self.setFixedSize(WIDGET_W, WIDGET_H)
         self.big = big
-        self.gif_path = gif_path
 
-        # --- Text label or GIF ---
-        self.label = QLabel(self)
+        # Main label (can show text or GIF)
+        self.label = QLabel(text, self)
         self.label.setAlignment(Qt.AlignCenter)
-        self.label.setStyleSheet("background: transparent; color: #ff00ff;")
-
-        if gif_path:
-            # Display animated GIF
-            self.movie = QMovie(gif_path)
-            self.movie.setScaledSize(self.size() * 0.8)  # scale to 80% of widget size
-            self.label.setMovie(self.movie)
-            self.movie.start()
-        else:
-            # Regular text
-            self.label.setText(text)
-            size = 30 if big else 23
-            font = QFont("Neuropolitical", size, QFont.Bold)
-            if font.family() == "Sans Serif":
-                font = QFont("Courier New", size, QFont.Bold)
-            self.label.setFont(font)
-
-            text_glow = QGraphicsDropShadowEffect(self.label)
-            text_glow.setBlurRadius(15)
-            glow_color = QColor(PINK)
-            glow_color.setAlpha(30)
-            text_glow.setColor(glow_color)
-            text_glow.setOffset(0, 0)
-            self.label.setGraphicsEffect(text_glow)
-
+        self.label.setStyleSheet("background: transparent; color:#ff00ff;")
+        size = 30 if big else 23
+        font = QFont("Neuropolitical", size, QFont.Bold)
+        if font.family() == "Sans Serif":
+            font = QFont("Courier New", size, QFont.Bold)
+        self.label.setFont(font)
         self.label.resize(self.size())
 
-        # Cyan border glow
+        # Cyan glow (frame)
         border_glow = QGraphicsDropShadowEffect(self)
         border_glow.setBlurRadius(80)
         border_glow.setColor(CYAN)
         border_glow.setOffset(0, 0)
         self.setGraphicsEffect(border_glow)
 
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        # Subtle pink glow for text
+        text_glow = QGraphicsDropShadowEffect(self.label)
+        text_glow.setBlurRadius(15)
+        glow_color = QColor(PINK)
+        glow_color.setAlpha(30)
+        text_glow.setColor(glow_color)
+        text_glow.setOffset(0, 0)
+        self.label.setGraphicsEffect(text_glow)
 
-    def setText(self, html):
-        if not self.gif_path:
-            self.label.setText(html)
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -115,20 +97,23 @@ class GlowWidget(QWidget):
         pen.setJoinStyle(Qt.RoundJoin)
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
+
+        # Outer frame
         rect = self.rect().adjusted(4, 4, -4, -4)
         p.drawRoundedRect(rect, RADIUS, RADIUS)
+
+        # Inner faint frame
         inset = self.rect().adjusted(22, 22, -22, -22)
-        faint = QColor(CYAN)
-        faint.setAlpha(60)
+        faint = QColor(CYAN); faint.setAlpha(60)
         pen2 = QPen(faint)
         pen2.setWidth(2)
         p.setPen(pen2)
-        p.drawRoundedRect(inset, RADIUS - 10, RADIUS - 10)
+        p.drawRoundedRect(inset, RADIUS-10, RADIUS-10)
         p.end()
 
-# ──────────────────────────────────────────────────────────────
-# Main Window
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# Main window
+# ──────────────────────────────────────────────
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -138,14 +123,12 @@ class MainWindow(QMainWindow):
 
         # Widgets
         self.top_left = self._mk(LEFT_X, TOP_Y, big=True)
-        self.top_right = self._mk(self.width() - RIGHT_X_GAP - WIDGET_W, TOP_Y)
-        self.bottom_right = self._mk(self.width() - RIGHT_X_GAP - WIDGET_W,
-                                     self.height() - BOTTOM_Y_GAP - WIDGET_H)
-        # Bottom-left widget now shows the GIF
-        self.bottom_left = self._mk(LEFT_X, self.height() - BOTTOM_Y_GAP - WIDGET_H,
-                                    gif_path="civic_spin.gif")
+        self.top_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W, TOP_Y)
+        self.bottom_left = self._mk(LEFT_X, self.height()-BOTTOM_Y_GAP-WIDGET_H)
+        self.bottom_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W,
+                                     self.height()-BOTTOM_Y_GAP-WIDGET_H)
 
-        # DHT sensor setup (optional)
+        # DHT sensor (optional)
         try:
             import Adafruit_DHT
             self.SENSOR_AVAILABLE = True
@@ -167,19 +150,34 @@ class MainWindow(QMainWindow):
         self.update_time()
         self.update_sensors()
 
-    def _mk(self, x, y, big=False, gif_path=None):
-        w = GlowWidget("Loading...", self, big=big, gif_path=gif_path)
+        # Civic GIF setup
+        self.setup_civic_gif()
+
+    def _mk(self, x, y, big=False):
+        w = GlowWidget("", self, big=big)
         w.move(x, y)
         return w
+
+    def setup_civic_gif(self):
+        """Replace bottom-left text with looping civic GIF."""
+        gif_path = "/home/matteo94/Desktop/cd/civic_spin.gif"
+        self.movie = QMovie(gif_path)
+        if not self.movie.isValid():
+            self.bottom_left.label.setText("GIF not found")
+            return
+        self.movie.setCacheMode(QMovie.CacheAll)
+        self.movie.setSpeed(100)
+        self.movie.setScaledSize(self.bottom_left.size() * 0.8)
+        self.bottom_left.label.setMovie(self.movie)
+        self.bottom_left.label.setScaledContents(True)
+        self.movie.start()
 
     def update_time(self):
         now = datetime.datetime.now()
         t = now.strftime("%H:%M")
         d = now.strftime("%d-%m-%Y")
-        self.top_left.setText(
-            f"<span style='font-size:30pt'>{t}</span><br>"
-            f"<span style='font-size:14pt'>{d}</span>"
-        )
+        self.top_left.setText(f"<span style='font-size:30pt'>{t}</span><br>"
+                              f"<span style='font-size:14pt'>{d}</span>")
 
     def update_sensors(self):
         if getattr(self, "SENSOR_AVAILABLE", False):
@@ -200,67 +198,40 @@ class MainWindow(QMainWindow):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        TL, TR, BL, BR = (
-            self.top_left.geometry(),
-            self.top_right.geometry(),
-            self.bottom_left.geometry(),
-            self.bottom_right.geometry(),
-        )
-
+        TL, TR, BL, BR = (self.top_left.geometry(), self.top_right.geometry(),
+                          self.bottom_left.geometry(), self.bottom_right.geometry())
         mid_x = (TL.right() + TR.left()) // 2
         top_bus_y, bot_bus_y = TL.center().y(), BL.center().y()
-        tl_r, tr_l = (TL.right() + PADDING, TL.center().y()), (TR.left() - PADDING, TR.center().y())
-        bl_r, br_l = (BL.right() + PADDING, BL.center().y()), (BR.left() - PADDING, BR.center().y())
+        tl_r, tr_l = (TL.right()+PADDING, TL.center().y()), (TR.left()-PADDING, TR.center().y())
+        bl_r, br_l = (BL.right()+PADDING, BL.center().y()), (BR.left()-PADDING, BR.center().y())
 
+        # Cyan connection lines
         for o in BUS_OFFS:
             y = top_bus_y + o
-            path = ortho_path([(tl_r[0], y), (mid_x - 28, y), (mid_x - 28, y + 12),
-                               (mid_x - 12, y + 12), (mid_x - 12, y), (tr_l[0], y)])
+            path = ortho_path([(tl_r[0], y), (mid_x - 28, y),
+                               (mid_x - 12, y), (tr_l[0], y)])
             neon_stroke(p, path, CYAN, CORE)
-
         for o in BUS_OFFS:
             y = bot_bus_y + o
-            path = ortho_path([(bl_r[0], y), (mid_x + 28, y), (mid_x + 28, y - 12),
-                               (mid_x + 12, y - 12), (mid_x + 12, y), (br_l[0], y)])
+            path = ortho_path([(bl_r[0], y), (mid_x + 28, y),
+                               (mid_x + 12, y), (br_l[0], y)])
             neon_stroke(p, path, CYAN, CORE)
 
+        # Center spine
         mid_gap_top = TL.bottom() + PADDING - 40
         mid_gap_bot = BR.top() - PADDING + 40
         for o in SPINE_OFFS:
             x = mid_x + o
-            path = ortho_path([
-                (x, mid_gap_top),
-                (x, (mid_gap_top + mid_gap_bot) // 2 - 27),
-                (x + (30 if o < 10 else 30), (mid_gap_top + mid_gap_bot) // 2 - 2),
-                (x, (mid_gap_top + mid_gap_bot) // 2 + 27),
-                (x, mid_gap_bot),
-            ])
+            path = ortho_path([(x, mid_gap_top),
+                               (x, mid_gap_bot)])
             neon_stroke(p, path, CYAN, CORE // 3)
-
-        right_x = TR.right() - 60
-        gap_top_r, gap_bot_r = TR.bottom(), BR.top()
-        center_y_r = (gap_top_r + gap_bot_r) // 2
-        path = ortho_path([(right_x, gap_top_r), (right_x, gap_bot_r)])
-        neon_stroke(p, path, CYAN, CORE)
-        for o in BRANCH_OFFSETS:
-            y = center_y_r + o
-            if gap_top_r < y < gap_bot_r:
-                path = ortho_path([(right_x, y), (right_x - 80, y)])
-                neon_stroke(p, path, CYAN, CORE // 2)
-                neon_dot(p, QPointF(right_x - 80, y), CYAN, 5)
-
-        base_y = BR.bottom() + 18
-        for w in (1, 3):
-            path = ortho_path([(TL.left() + 20, base_y + 6 * w),
-                               (TR.right() - 40, base_y + 6 * w)])
-            neon_stroke(p, path, PINK, w)
 
         p.end()
 
 
-# ──────────────────────────────────────────────────────────────
-# Run
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# Run app
+# ──────────────────────────────────────────────
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = MainWindow()
