@@ -1,4 +1,4 @@
-# Cyberpunk Dashboard – PCB v7.2 (APNG animation added to bottom-left widget)
+# Cyberpunk Dashboard – PCB v7.3 (bottom-left GIF widget integration)
 import sys, random, datetime
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QGraphicsDropShadowEffect
 from PyQt5.QtCore import Qt, QTimer, QPointF
@@ -12,8 +12,6 @@ LEFT_X, RIGHT_X_GAP = 40, 40
 TOP_Y, BOTTOM_Y_GAP = 50, 50
 CYAN = QColor("#00ffff")
 PINK = QColor("#ff00ff")
-GRID_COLOR = QColor(30, 30, 30)
-GRID_STEP = 40
 BORDER_WIDTH = 4
 RADIUS = 30
 PADDING = 8
@@ -39,6 +37,7 @@ def neon_stroke(p: QPainter, path: QPainterPath, color: QColor, core_width: int)
         p.setPen(pen)
         p.drawPath(path)
 
+
 def neon_dot(p: QPainter, pos: QPointF, color: QColor, radius: int):
     c1 = QColor(color); c1.setAlpha(60)
     c2 = QColor(color); c2.setAlpha(120)
@@ -48,6 +47,7 @@ def neon_dot(p: QPainter, pos: QPointF, color: QColor, radius: int):
         p.setPen(Qt.NoPen)
         p.drawEllipse(pos, r, r)
 
+
 def ortho_path(points):
     path = QPainterPath(QPointF(points[0][0], points[0][1]))
     for x, y in points[1:]:
@@ -55,22 +55,43 @@ def ortho_path(points):
     return path
 
 # ──────────────────────────────────────────────────────────────
-# Widget (cyan border glow + reduced pink text glow)
+# Widget (cyan border glow + optional GIF integration)
 # ──────────────────────────────────────────────────────────────
 class GlowWidget(QWidget):
-    def __init__(self, text, parent=None, big=False):
+    def __init__(self, text, parent=None, big=False, gif_path=None):
         super().__init__(parent)
         self.setFixedSize(WIDGET_W, WIDGET_H)
         self.big = big
+        self.gif_path = gif_path
 
-        self.label = QLabel(text, self)
+        # --- Text label or GIF ---
+        self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignCenter)
-        self.label.setStyleSheet("color:#ff00ff; background:transparent;")
-        size = 30 if big else 23
-        font = QFont("Neuropolitical", size, QFont.Bold)
-        if font.family() == "Sans Serif":
-            font = QFont("Courier New", size, QFont.Bold)
-        self.label.setFont(font)
+        self.label.setStyleSheet("background: transparent; color: #ff00ff;")
+
+        if gif_path:
+            # Display animated GIF
+            self.movie = QMovie(gif_path)
+            self.movie.setScaledSize(self.size() * 0.8)  # scale to 80% of widget size
+            self.label.setMovie(self.movie)
+            self.movie.start()
+        else:
+            # Regular text
+            self.label.setText(text)
+            size = 30 if big else 23
+            font = QFont("Neuropolitical", size, QFont.Bold)
+            if font.family() == "Sans Serif":
+                font = QFont("Courier New", size, QFont.Bold)
+            self.label.setFont(font)
+
+            text_glow = QGraphicsDropShadowEffect(self.label)
+            text_glow.setBlurRadius(15)
+            glow_color = QColor(PINK)
+            glow_color.setAlpha(30)
+            text_glow.setColor(glow_color)
+            text_glow.setOffset(0, 0)
+            self.label.setGraphicsEffect(text_glow)
+
         self.label.resize(self.size())
 
         # Cyan border glow
@@ -80,19 +101,11 @@ class GlowWidget(QWidget):
         border_glow.setOffset(0, 0)
         self.setGraphicsEffect(border_glow)
 
-        # Reduced pink text glow
-        text_glow = QGraphicsDropShadowEffect(self.label)
-        text_glow.setBlurRadius(15)
-        glow_color = QColor(PINK)
-        glow_color.setAlpha(30)
-        text_glow.setColor(glow_color)
-        text_glow.setOffset(0, 0)
-        self.label.setGraphicsEffect(text_glow)
-
         self.setAttribute(Qt.WA_TranslucentBackground)
 
     def setText(self, html):
-        self.label.setText(html)
+        if not self.gif_path:
+            self.label.setText(html)
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -105,8 +118,10 @@ class GlowWidget(QWidget):
         rect = self.rect().adjusted(4, 4, -4, -4)
         p.drawRoundedRect(rect, RADIUS, RADIUS)
         inset = self.rect().adjusted(22, 22, -22, -22)
-        faint = QColor(CYAN); faint.setAlpha(60)
-        pen2 = QPen(faint); pen2.setWidth(2)
+        faint = QColor(CYAN)
+        faint.setAlpha(60)
+        pen2 = QPen(faint)
+        pen2.setWidth(2)
         p.setPen(pen2)
         p.drawRoundedRect(inset, RADIUS - 10, RADIUS - 10)
         p.end()
@@ -117,35 +132,20 @@ class GlowWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Cyberpunk Dashboard – PCB v7.2")
+        self.setWindowTitle("Cyberpunk Dashboard – PCB v7.3")
         self.setFixedSize(640, 480)
         self.setStyleSheet("background-color:#0d0d0d;")
 
-        # ──────────────────────────────────────────────
         # Widgets
-        # ──────────────────────────────────────────────
         self.top_left = self._mk(LEFT_X, TOP_Y, big=True)
         self.top_right = self._mk(self.width() - RIGHT_X_GAP - WIDGET_W, TOP_Y)
-        self.bottom_left = self._mk(LEFT_X, self.height() - BOTTOM_Y_GAP - WIDGET_H)
         self.bottom_right = self._mk(self.width() - RIGHT_X_GAP - WIDGET_W,
                                      self.height() - BOTTOM_Y_GAP - WIDGET_H)
+        # Bottom-left widget now shows the GIF
+        self.bottom_left = self._mk(LEFT_X, self.height() - BOTTOM_Y_GAP - WIDGET_H,
+                                    gif_path="civic_spin.gif")
 
-        # ──────────────────────────────────────────────
-        # Add looping APNG animation in bottom-left widget
-        # ──────────────────────────────────────────────
-        self.car_label = QLabel(self.bottom_left)
-        self.car_label.setGeometry(25, 20, 200, 120)
-        self.car_label.setStyleSheet("background: transparent;")
-        self.car_movie = QMovie("civic_spin.apng")
-        self.car_movie.setScaledSize(self.car_label.size())
-        self.car_label.setMovie(self.car_movie)
-        self.car_movie.setCacheMode(QMovie.CacheAll)
-        self.car_movie.setSpeed(100)
-        self.car_movie.start()
-
-        # ──────────────────────────────────────────────
-        # Optional sensor setup
-        # ──────────────────────────────────────────────
+        # DHT sensor setup (optional)
         try:
             import Adafruit_DHT
             self.SENSOR_AVAILABLE = True
@@ -167,8 +167,8 @@ class MainWindow(QMainWindow):
         self.update_time()
         self.update_sensors()
 
-    def _mk(self, x, y, big=False):
-        w = GlowWidget("Loading...", self, big=big)
+    def _mk(self, x, y, big=False, gif_path=None):
+        w = GlowWidget("Loading...", self, big=big, gif_path=gif_path)
         w.move(x, y)
         return w
 
@@ -196,12 +196,10 @@ class MainWindow(QMainWindow):
             self.top_right.setText(f"Outside:\n{T:.1f} °C (demo)")
             self.bottom_right.setText(f"Inside:\n{H:.1f} % (demo)")
 
-    # ──────────────────────────────────────────────
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # ──────── Core neon trace layout ────────
         TL, TR, BL, BR = (
             self.top_left.geometry(),
             self.top_right.geometry(),
@@ -214,19 +212,18 @@ class MainWindow(QMainWindow):
         tl_r, tr_l = (TL.right() + PADDING, TL.center().y()), (TR.left() - PADDING, TR.center().y())
         bl_r, br_l = (BL.right() + PADDING, BL.center().y()), (BR.left() - PADDING, BR.center().y())
 
-        # Buses
         for o in BUS_OFFS:
             y = top_bus_y + o
             path = ortho_path([(tl_r[0], y), (mid_x - 28, y), (mid_x - 28, y + 12),
                                (mid_x - 12, y + 12), (mid_x - 12, y), (tr_l[0], y)])
             neon_stroke(p, path, CYAN, CORE)
+
         for o in BUS_OFFS:
             y = bot_bus_y + o
             path = ortho_path([(bl_r[0], y), (mid_x + 28, y), (mid_x + 28, y - 12),
                                (mid_x + 12, y - 12), (mid_x + 12, y), (br_l[0], y)])
             neon_stroke(p, path, CYAN, CORE)
 
-        # Spines
         mid_gap_top = TL.bottom() + PADDING - 40
         mid_gap_bot = BR.top() - PADDING + 40
         for o in SPINE_OFFS:
@@ -240,7 +237,6 @@ class MainWindow(QMainWindow):
             ])
             neon_stroke(p, path, CYAN, CORE // 3)
 
-        # Right cyan motherboard style lines
         right_x = TR.right() - 60
         gap_top_r, gap_bot_r = TR.bottom(), BR.top()
         center_y_r = (gap_top_r + gap_bot_r) // 2
@@ -253,7 +249,6 @@ class MainWindow(QMainWindow):
                 neon_stroke(p, path, CYAN, CORE // 2)
                 neon_dot(p, QPointF(right_x - 80, y), CYAN, 5)
 
-        # Bottom pink glowing base lines
         base_y = BR.bottom() + 18
         for w in (1, 3):
             path = ortho_path([(TL.left() + 20, base_y + 6 * w),
@@ -262,6 +257,9 @@ class MainWindow(QMainWindow):
 
         p.end()
 
+
+# ──────────────────────────────────────────────────────────────
+# Run
 # ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app = QApplication(sys.argv)
