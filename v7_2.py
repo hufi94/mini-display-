@@ -1,4 +1,4 @@
-# Cyberpunk Dashboard – PCB v7.3 (Civic GIF integration + loop)
+# Cyberpunk Dashboard – PCB v7.3 (Civic GIF + Fixed setText)
 import sys, random, datetime
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QGraphicsDropShadowEffect
 from PyQt5.QtCore import Qt, QTimer, QPointF
@@ -52,7 +52,7 @@ def ortho_path(points):
     return path
 
 # ──────────────────────────────────────────────
-# Widget class
+# Widget class (with working setText)
 # ──────────────────────────────────────────────
 class GlowWidget(QWidget):
     def __init__(self, text="", parent=None, big=False):
@@ -60,7 +60,7 @@ class GlowWidget(QWidget):
         self.setFixedSize(WIDGET_W, WIDGET_H)
         self.big = big
 
-        # Main label (can show text or GIF)
+        # Label
         self.label = QLabel(text, self)
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setStyleSheet("background: transparent; color:#ff00ff;")
@@ -71,14 +71,14 @@ class GlowWidget(QWidget):
         self.label.setFont(font)
         self.label.resize(self.size())
 
-        # Cyan glow (frame)
+        # Neon frame glow
         border_glow = QGraphicsDropShadowEffect(self)
         border_glow.setBlurRadius(80)
         border_glow.setColor(CYAN)
         border_glow.setOffset(0, 0)
         self.setGraphicsEffect(border_glow)
 
-        # Subtle pink glow for text
+        # Pink text glow
         text_glow = QGraphicsDropShadowEffect(self.label)
         text_glow.setBlurRadius(15)
         glow_color = QColor(PINK)
@@ -89,6 +89,10 @@ class GlowWidget(QWidget):
 
         self.setAttribute(Qt.WA_TranslucentBackground)
 
+    def setText(self, html):
+        """Fix: allows setting new text dynamically"""
+        self.label.setText(html)
+
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
@@ -98,15 +102,12 @@ class GlowWidget(QWidget):
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
 
-        # Outer frame
         rect = self.rect().adjusted(4, 4, -4, -4)
         p.drawRoundedRect(rect, RADIUS, RADIUS)
 
-        # Inner faint frame
         inset = self.rect().adjusted(22, 22, -22, -22)
         faint = QColor(CYAN); faint.setAlpha(60)
-        pen2 = QPen(faint)
-        pen2.setWidth(2)
+        pen2 = QPen(faint); pen2.setWidth(2)
         p.setPen(pen2)
         p.drawRoundedRect(inset, RADIUS-10, RADIUS-10)
         p.end()
@@ -121,14 +122,12 @@ class MainWindow(QMainWindow):
         self.setFixedSize(640, 480)
         self.setStyleSheet("background-color:#0d0d0d;")
 
-        # Widgets
         self.top_left = self._mk(LEFT_X, TOP_Y, big=True)
         self.top_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W, TOP_Y)
         self.bottom_left = self._mk(LEFT_X, self.height()-BOTTOM_Y_GAP-WIDGET_H)
         self.bottom_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W,
                                      self.height()-BOTTOM_Y_GAP-WIDGET_H)
 
-        # DHT sensor (optional)
         try:
             import Adafruit_DHT
             self.SENSOR_AVAILABLE = True
@@ -138,7 +137,6 @@ class MainWindow(QMainWindow):
         except ImportError:
             self.SENSOR_AVAILABLE = False
 
-        # Timers
         self.t_timer = QTimer(self)
         self.t_timer.timeout.connect(self.update_time)
         self.t_timer.start(1000)
@@ -150,7 +148,7 @@ class MainWindow(QMainWindow):
         self.update_time()
         self.update_sensors()
 
-        # Civic GIF setup
+        # Civic GIF animation
         self.setup_civic_gif()
 
     def _mk(self, x, y, big=False):
@@ -159,7 +157,7 @@ class MainWindow(QMainWindow):
         return w
 
     def setup_civic_gif(self):
-        """Replace bottom-left text with looping civic GIF."""
+        """Replaces bottom-left text with looping GIF."""
         gif_path = "/home/matteo94/Desktop/cd/civic_spin.gif"
         self.movie = QMovie(gif_path)
         if not self.movie.isValid():
@@ -167,9 +165,8 @@ class MainWindow(QMainWindow):
             return
         self.movie.setCacheMode(QMovie.CacheAll)
         self.movie.setSpeed(100)
-        self.movie.setScaledSize(self.bottom_left.size() * 0.8)
-        self.bottom_left.label.setMovie(self.movie)
         self.bottom_left.label.setScaledContents(True)
+        self.bottom_left.label.setMovie(self.movie)
         self.movie.start()
 
     def update_time(self):
@@ -194,43 +191,6 @@ class MainWindow(QMainWindow):
             self.top_right.setText(f"Outside:\n{T:.1f} °C (demo)")
             self.bottom_right.setText(f"Inside:\n{H:.1f} % (demo)")
 
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-
-        TL, TR, BL, BR = (self.top_left.geometry(), self.top_right.geometry(),
-                          self.bottom_left.geometry(), self.bottom_right.geometry())
-        mid_x = (TL.right() + TR.left()) // 2
-        top_bus_y, bot_bus_y = TL.center().y(), BL.center().y()
-        tl_r, tr_l = (TL.right()+PADDING, TL.center().y()), (TR.left()-PADDING, TR.center().y())
-        bl_r, br_l = (BL.right()+PADDING, BL.center().y()), (BR.left()-PADDING, BR.center().y())
-
-        # Cyan connection lines
-        for o in BUS_OFFS:
-            y = top_bus_y + o
-            path = ortho_path([(tl_r[0], y), (mid_x - 28, y),
-                               (mid_x - 12, y), (tr_l[0], y)])
-            neon_stroke(p, path, CYAN, CORE)
-        for o in BUS_OFFS:
-            y = bot_bus_y + o
-            path = ortho_path([(bl_r[0], y), (mid_x + 28, y),
-                               (mid_x + 12, y), (br_l[0], y)])
-            neon_stroke(p, path, CYAN, CORE)
-
-        # Center spine
-        mid_gap_top = TL.bottom() + PADDING - 40
-        mid_gap_bot = BR.top() - PADDING + 40
-        for o in SPINE_OFFS:
-            x = mid_x + o
-            path = ortho_path([(x, mid_gap_top),
-                               (x, mid_gap_bot)])
-            neon_stroke(p, path, CYAN, CORE // 3)
-
-        p.end()
-
-
-# ──────────────────────────────────────────────
-# Run app
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
     app = QApplication(sys.argv)
