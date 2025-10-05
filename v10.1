@@ -1,0 +1,197 @@
+# Cyberpunk Dashboard – PCB v10.1
+# Live DHT22 integration with auto-fallback to demo mode
+
+import sys, os, random, datetime
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QGraphicsDropShadowEffect
+from PyQt5.QtCore import Qt, QTimer, QPointF, QRect
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPainterPath, QMovie
+
+# ───────────────────────────────
+# SETTINGS
+# ───────────────────────────────
+WIDGET_W, WIDGET_H = 250, 160
+LEFT_X, RIGHT_X_GAP = 40, 40
+TOP_Y, BOTTOM_Y_GAP = 50, 50
+
+CYAN = QColor("#00ffff")
+PINK = QColor("#ff00ff")
+GRID_COLOR = QColor(30, 30, 30)
+GRID_STEP = 40
+BORDER_WIDTH = 4
+RADIUS = 30
+PADDING = 8
+CORE = 3
+
+BUS_OFFS = [-20, -10, 10, 20]
+SPINE_OFFS = [-34, -32, 34, 36]
+BRANCH_OFFSETS = [-13, 13]
+
+CIVIC_GIF = os.path.join(os.path.dirname(__file__), "civic_spin.gif")
+
+# ───────────────────────────────
+# Glow + helpers
+# ───────────────────────────────
+def neon_stroke(p, path, color, core_width):
+    c1, c2, c3 = QColor(color), QColor(color), QColor(color)
+    for (w, a) in ((core_width*3, 60), (int(core_width*1.7), 120), (core_width, 255)):
+        c = QColor(color); c.setAlpha(a)
+        pen = QPen(c); pen.setWidth(w)
+        pen.setCapStyle(Qt.RoundCap); pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen); p.drawPath(path)
+
+def neon_dot(p, pos, color, radius):
+    for (r, a) in ((radius*2, 60), (int(radius*1.5), 120), (radius, 255)):
+        c = QColor(color); c.setAlpha(a)
+        p.setBrush(c); p.setPen(Qt.NoPen); p.drawEllipse(pos, r, r)
+
+def ortho_path(points):
+    path = QPainterPath(QPointF(points[0][0], points[0][1]))
+    for x, y in points[1:]:
+        path.lineTo(QPointF(x, y))
+    return path
+
+# ───────────────────────────────
+# Widget
+# ───────────────────────────────
+class GlowWidget(QWidget):
+    def __init__(self, text="", parent=None, big=False):
+        super().__init__(parent)
+        self.setFixedSize(WIDGET_W, WIDGET_H)
+        self.big = big
+        self.movie = None
+        self.movie_label = None
+
+        self.label = QLabel(text, self)
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setStyleSheet("color:#ff00ff; background:transparent;")
+        size = 30 if big else 23
+        font = QFont("Neuropolitical", size, QFont.Bold)
+        if font.family() == "Sans Serif":
+            font = QFont("Courier New", size, QFont.Bold)
+        self.label.setFont(font)
+        self.label.resize(self.size())
+
+        border_glow = QGraphicsDropShadowEffect(self)
+        border_glow.setBlurRadius(80); border_glow.setColor(CYAN); border_glow.setOffset(0, 0)
+        self.setGraphicsEffect(border_glow)
+
+        text_glow = QGraphicsDropShadowEffect(self.label)
+        text_glow.setBlurRadius(15)
+        glow_color = QColor(PINK); glow_color.setAlpha(30)
+        text_glow.setColor(glow_color); text_glow.setOffset(0, 0)
+        self.label.setGraphicsEffect(text_glow)
+
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def _inner_rect(self): return self.rect().adjusted(22, 22, -22, -22)
+
+    def setText(self, html):
+        if self.movie_label: self.movie_label.hide()
+        self.label.show(); self.label.setText(html)
+
+    def setMovie(self, gif_path):
+        if not os.path.exists(gif_path):
+            print(f"[!] GIF not found at {gif_path}"); return
+        if self.movie_label is None:
+            self.movie_label = QLabel(self)
+            self.movie_label.setAttribute(Qt.WA_TranslucentBackground)
+            self.movie_label.setStyleSheet("background:transparent;")
+            self.movie_label.lower()
+        self.movie = QMovie(gif_path)
+        self.movie.setCacheMode(QMovie.CacheAll)
+        self.movie.setSpeed(100)
+        self.movie.setScaledSize(self._inner_rect().size())
+        self.movie_label.setGeometry(self._inner_rect())
+        self.movie_label.setMovie(self.movie)
+        self.movie.start()
+        self.movie_label.show(); self.label.hide()
+
+    def paintEvent(self, _):
+        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(CYAN); pen.setWidth(BORDER_WIDTH); p.setPen(pen)
+        p.drawRoundedRect(self.rect().adjusted(4, 4, -4, -4), RADIUS, RADIUS)
+        faint = QColor(CYAN); faint.setAlpha(60)
+        p.setPen(QPen(faint, 2)); p.drawRoundedRect(self._inner_rect(), RADIUS-10, RADIUS-10)
+        p.end()
+
+# ───────────────────────────────
+# Main Window
+# ───────────────────────────────
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Cyberpunk Dashboard – PCB v10.1")
+        self.setFixedSize(640, 480)
+        self.setStyleSheet("background-color:#0d0d0d;")
+
+        # grid motion
+        self.grid_step = 40; self.grid_offset_x = 0; self.grid_offset_y = 0
+        self.grid_timer = QTimer(self); self.grid_timer.timeout.connect(self.animate_grid); self.grid_timer.start(40)
+
+        # widgets
+        self.top_left = self._mk(LEFT_X, TOP_Y, big=True)
+        self.top_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W, TOP_Y)
+        self.bottom_left = self._mk(LEFT_X, self.height()-BOTTOM_Y_GAP-WIDGET_H)
+        self.bottom_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W, self.height()-BOTTOM_Y_GAP-WIDGET_H)
+
+        self.bottom_left.setMovie(CIVIC_GIF)
+
+        # try load DHT
+        try:
+            import adafruit_dht, board
+            self.SENSOR_AVAILABLE = True
+            self.sensor = adafruit_dht.DHT22(board.D4)
+            print("[✓] DHT22 sensor active")
+        except Exception as e:
+            self.SENSOR_AVAILABLE = False
+            print("[!] DHT22 unavailable:", e)
+
+        # timers
+        self.t_timer = QTimer(self); self.t_timer.timeout.connect(self.update_time); self.t_timer.start(1000)
+        self.s_timer = QTimer(self); self.s_timer.timeout.connect(self.update_sensors); self.s_timer.start(5000)
+        self.update_time(); self.update_sensors()
+
+    def _mk(self, x, y, big=False):
+        w = GlowWidget("", self, big=big); w.move(x, y); return w
+
+    def animate_grid(self):
+        self.grid_offset_x += 0.5; self.grid_offset_y += 0.5; self.update()
+
+    def update_time(self):
+        now = datetime.datetime.now()
+        t = now.strftime("%H:%M"); d = now.strftime("%d-%m-%Y")
+        self.top_left.setText(f"<span style='font-size:30pt'>{t}</span><br><span style='font-size:14pt'>{d}</span>")
+
+    def update_sensors(self):
+        try:
+            if self.SENSOR_AVAILABLE:
+                T = self.sensor.temperature
+                H = self.sensor.humidity
+                if T is None or H is None: raise ValueError("Invalid reading")
+                self.top_right.setText(f"Temp:<br>{T:.1f} °C")
+                self.bottom_right.setText(f"Humidity:<br>{H:.1f} %")
+                return
+        except Exception as e:
+            print("[!] DHT22 read error, fallback to demo:", e)
+        # fallback demo mode
+        T = random.uniform(18, 25)
+        H = random.uniform(40, 60)
+        self.top_right.setText(f"Temp:<br>{T:.1f} °C (demo)")
+        self.bottom_right.setText(f"Humidity:<br>{H:.1f} % (demo)")
+
+    # paint background + neon traces
+    def paintEvent(self, _):
+        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        grid_color = QColor(40, 40, 40, 120); pen = QPen(grid_color); pen.setWidth(1); p.setPen(pen)
+        step, ox, oy = self.grid_step, self.grid_offset_x, self.grid_offset_y
+        for x in range(-step*2, self.width()+step*2, step):
+            px = int(x + (ox % step)); p.drawLine(px, 0, px, self.height())
+        for y in range(-step*2, self.height()+step*2, step):
+            py = int(y + (oy % step)); p.drawLine(0, py, self.width(), py)
+        p.end()
+
+# ───────────────────────────────
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    win = MainWindow(); win.show()
+    sys.exit(app.exec_())
