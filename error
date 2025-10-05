@@ -1,0 +1,21 @@
+matteo94@raspberrypi:~ $ source ~/dashboard-env/bin/activate
+python3 ~/dht_test.py
+/home/matteo94/dashboard-env/lib/python3.13/site-packages/adafruit_blinka/microcontroller/bcm283x/pulseio/libgpiod_pulsein64: symbol lookup error: /home/matteo94/dashboard-env/lib/python3.13/site-packages/adafruit_blinka/microcontroller/bcm283x/pulseio/libgpiod_pulsein64: undefined symbol: gpiod_chip_open_by_name
+Traceback (most recent call last):
+  File "/home/matteo94/dht_test.py", line 6, in <module>
+    sensor = adafruit_dht.DHT22(board.D4)
+  File "/home/matteo94/dashboard-env/lib/python3.13/site-packages/adafruit_dht.py", line 300, in __init__
+    super().__init__(False, pin, 1000, use_pulseio)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/matteo94/dashboard-env/lib/python3.13/site-packages/adafruit_dht.py", line 82, in __init__
+    self.pulse_in = PulseIn(self._pin, maxlen=self._max_pulses, idle_state=True)
+                    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/matteo94/dashboard-env/lib/python3.13/site-packages/adafruit_blinka/microcontroller/bcm283x/pulseio/PulseIn.py", line 89, in __init__
+    message = self._wait_receive_msg(timeout=0.25)
+  File "/home/matteo94/dashboard-env/lib/python3.13/site-packages/adafruit_blinka/microcontroller/bcm283x/pulseio/PulseIn.py", line 107, in _wait_receive_msg
+    raise RuntimeError(
+        "Timed out waiting for PulseIn message. Make sure libgpiod is installed."
+    )
+RuntimeError: Timed out waiting for PulseIn message. Make sure libgpiod is installed.
+(dashboard-env) matteo94@raspberrypi:~ $ 
+
