@@ -1,0 +1,146 @@
+# Cyberpunk Dashboard – PCB v9.0
+# Neon motherboard grid + connecting lines + Civic spin (bottom-left)
+
+import sys, math, datetime
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel
+from PyQt5.QtCore import Qt, QTimer, QPointF
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QMovie, QPainterPath
+
+# ─────────────────────────────
+# CONFIG
+# ─────────────────────────────
+WIDGET_W, WIDGET_H = 250, 160
+LEFT_X, RIGHT_X_GAP = 40, 40
+TOP_Y, BOTTOM_Y_GAP = 50, 50
+WINDOW_W, WINDOW_H = 640, 480
+GRID_SPACING = 40
+GRID_SPEED = 0.4
+
+CYAN = QColor("#00ffff")
+PINK = QColor("#ff00ff")
+PURPLE = QColor("#c000ff")
+BG_COLOR = QColor(0, 0, 0)
+
+# ─────────────────────────────
+# GlowWidget
+# ─────────────────────────────
+class GlowWidget(QWidget):
+    def __init__(self, parent=None, text="", gif_path=None):
+        super().__init__(parent)
+        self.setFixedSize(WIDGET_W, WIDGET_H)
+        self.text = text
+        self.gif_path = gif_path
+
+        self.label = QLabel(self)
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.resize(self.size())
+        if self.gif_path:
+            movie = QMovie(self.gif_path)
+            movie.setScaledSize(self.size())
+            self.label.setMovie(movie)
+            movie.start()
+        else:
+            self.label.setText(self.text)
+            self.label.setStyleSheet("color: #d28eff;")
+            self.label.setFont(QFont("Neuropolitical", 23))
+
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(CYAN, 3)
+        painter.setPen(pen)
+        painter.drawRoundedRect(3, 3, self.width()-6, self.height()-6, 25, 25)
+
+# ─────────────────────────────
+# Main Dashboard
+# ─────────────────────────────
+class Dashboard(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Cyberpunk Dashboard v9.0")
+        self.setFixedSize(WINDOW_W, WINDOW_H)
+        self.setStyleSheet("background-color: black;")
+
+        # grid animation offsets
+        self.grid_offset = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(30)
+
+        # widgets
+        self.time_widget = GlowWidget(self, text="--:--")
+        self.temp_widget = GlowWidget(self, text="TEMP")
+        self.civic_widget = GlowWidget(self, gif_path="civic_spin.gif")
+        self.extra_widget = GlowWidget(self, text="STATUS")
+
+        # positions
+        self.time_widget.move(LEFT_X, TOP_Y)
+        self.temp_widget.move(WINDOW_W - WIDGET_W - RIGHT_X_GAP, TOP_Y)
+        self.civic_widget.move(LEFT_X, WINDOW_H - WIDGET_H - BOTTOM_Y_GAP)
+        self.extra_widget.move(WINDOW_W - WIDGET_W - RIGHT_X_GAP,
+                               WINDOW_H - WIDGET_H - BOTTOM_Y_GAP)
+
+        # update clock
+        self.clock_timer = QTimer(self)
+        self.clock_timer.timeout.connect(self.update_time)
+        self.clock_timer.start(1000)
+        self.update_time()
+
+    # ───────── Grid + Lines ─────────
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(self.rect(), BG_COLOR)
+
+        # diagonal grid
+        self.grid_offset = (self.grid_offset + GRID_SPEED) % GRID_SPACING
+        painter.setPen(QPen(QColor(40, 40, 40), 1))
+        for i in range(-WINDOW_H, WINDOW_W, GRID_SPACING):
+            painter.drawLine(i + self.grid_offset, 0,
+                             i - WINDOW_H + self.grid_offset, WINDOW_H)
+        for i in range(0, WINDOW_W + WINDOW_H, GRID_SPACING):
+            painter.drawLine(i - self.grid_offset, 0,
+                             i + WINDOW_H - self.grid_offset, WINDOW_H)
+
+        # cyan connection lines
+        painter.setPen(QPen(CYAN, 3))
+        # top horizontal
+        painter.drawLine(self.time_widget.x() + WIDGET_W,
+                         self.time_widget.y() + WIDGET_H/2,
+                         self.temp_widget.x(),
+                         self.temp_widget.y() + WIDGET_H/2)
+        # bottom horizontal
+        painter.drawLine(self.civic_widget.x() + WIDGET_W,
+                         self.civic_widget.y() + WIDGET_H/2,
+                         self.extra_widget.x(),
+                         self.extra_widget.y() + WIDGET_H/2)
+        # vertical left
+        painter.drawLine(self.time_widget.x() + WIDGET_W/2,
+                         self.time_widget.y() + WIDGET_H,
+                         self.civic_widget.x() + WIDGET_W/2,
+                         self.civic_widget.y())
+        # vertical right
+        painter.drawLine(self.temp_widget.x() + WIDGET_W/2,
+                         self.temp_widget.y() + WIDGET_H,
+                         self.extra_widget.x() + WIDGET_W/2,
+                         self.extra_widget.y())
+
+        # purple bottom base lines
+        painter.setPen(QPen(PURPLE, 4))
+        painter.drawLine(0, WINDOW_H - 2, WINDOW_W, WINDOW_H - 2)
+
+    # ───────── Clock update ─────────
+    def update_time(self):
+        now = datetime.datetime.now()
+        self.time_widget.label.setText(now.strftime("%H:%M\n%Y-%m-%d"))
+
+# ─────────────────────────────
+# Run app
+# ─────────────────────────────
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    dash = Dashboard()
+    dash.show()
+    sys.exit(app.exec_())
