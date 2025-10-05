@@ -1,64 +1,124 @@
-def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
+mport bpy, os, math, subprocess
+from mathutils import Vector
 
-        # ──────── Core neon trace layout ────────
-        TL, TR, BL, BR = (
-            self.top_left.geometry(),
-            self.top_right.geometry(),
-            self.bottom_left.geometry(),
-            self.bottom_right.geometry(),
-        )
+# ---------------- SETTINGS ----------------
+MODEL_PATH = r"/Users/matthiashufnagl/Desktop/cd/ek9_fixed.glb"
+OUT_DIR    = r"/Users/matthiashufnagl/Desktop/cd/ek9_test_frames"
+GIF_PATH   = r"/Users/matthiashufnagl/Desktop/cd/civic_spin_test.gif"
+MP4_PATH   = r"/Users/matthiashufnagl/Desktop/cd/civic_spin_test.mp4"
 
-        mid_x = (TL.right() + TR.left()) // 2
-        top_bus_y, bot_bus_y = TL.center().y(), BL.center().y()
-        tl_r, tr_l = (TL.right() + PADDING, TL.center().y()), (TR.left() - PADDING, TR.center().y())
-        bl_r, br_l = (BL.right() + PADDING, BL.center().y()), (BR.left() - PADDING, BR.center().y())
+TEST_MODE = True   # ✅ quick preview
+NUM_FRAMES = 110 if not TEST_MODE else 12
+FPS        = 15
 
-        # Buses
-        for o in BUS_OFFS:
-            y = top_bus_y + o
-            path = ortho_path([(tl_r[0], y), (mid_x - 28, y), (mid_x - 28, y + 12),
-                               (mid_x - 12, y + 12), (mid_x - 12, y), (tr_l[0], y)])
-            neon_stroke(p, path, CYAN, CORE)
-        for o in BUS_OFFS:
-            y = bot_bus_y + o
-            path = ortho_path([(bl_r[0], y), (mid_x + 28, y), (mid_x + 28, y - 12),
-                               (mid_x + 12, y - 12), (mid_x + 12, y), (br_l[0], y)])
-            neon_stroke(p, path, CYAN, CORE)
+SCALE      = 10
+RES_X, RES_Y = 854, 480
+CAMERA_HEIGHT = 2.5
+CAR_LOWER = 0.5
+# ------------------------------------------
 
-        # Spines
-        mid_gap_top = TL.bottom() + PADDING - 40
-        mid_gap_bot = BR.top() - PADDING + 40
-        for o in SPINE_OFFS:
-            x = mid_x + o
-            path = ortho_path([
-                (x, mid_gap_top),
-                (x, (mid_gap_top + mid_gap_bot) // 2 - 27),
-                (x + (30 if o < 10 else 30), (mid_gap_top + mid_gap_bot) // 2 - 2),
-                (x, (mid_gap_top + mid_gap_bot) // 2 + 27),
-                (x, mid_gap_bot),
-            ])
-            neon_stroke(p, path, CYAN, CORE // 3)
+bpy.ops.wm.read_factory_settings(use_empty=True)
+scn = bpy.context.scene
 
-        # Right cyan motherboard style lines
-        right_x = TR.right() - 60
-        gap_top_r, gap_bot_r = TR.bottom(), BR.top()
-        center_y_r = (gap_top_r + gap_bot_r) // 2
-        path = ortho_path([(right_x, gap_top_r), (right_x, gap_bot_r)])
-        neon_stroke(p, path, CYAN, CORE)
-        for o in BRANCH_OFFSETS:
-            y = center_y_r + o
-            if gap_top_r < y < gap_bot_r:
-                path = ortho_path([(right_x, y), (right_x - 80, y)])
-                neon_stroke(p, path, CYAN, CORE // 2)
-                neon_dot(p, QPointF(right_x - 80, y), CYAN, 5)
+# Render settings
+scn.render.engine = 'BLENDER_EEVEE_NEXT'
+scn.render.image_settings.file_format = 'PNG'
+scn.render.image_settings.color_mode = 'RGBA'
+scn.render.film_transparent = True
+scn.render.resolution_x = RES_X
+scn.render.resolution_y = RES_Y
+scn.render.resolution_percentage = 100
+scn.frame_start = 1
+scn.frame_end = NUM_FRAMES
+scn.render.fps = FPS
 
-        # Bottom pink glowing base lines
-        base_y = BR.bottom() + 18
-        for w in (1, 3):
-            path = ortho_path([(TL.left() + 20, base_y + 6 * w),
-                               (TR.right() - 40, base_y + 6 * w)])
-            neon_stroke(p, path, PINK, w)
+if not os.path.exists(OUT_DIR):
+    os.makedirs(OUT_DIR)
+scn.render.filepath = os.path.join(OUT_DIR, "frame_")
 
-        p.end()
+# World lighting
+if scn.world is None:
+    scn.world = bpy.data.worlds.new("World")
+scn.world.use_nodes = True
+bg = scn.world.node_tree.nodes["Background"]
+bg.inputs[1].default_value = 0.4
+
+# Import Civic
+bpy.ops.import_scene.gltf(filepath=MODEL_PATH)
+meshes = [obj for obj in bpy.data.objects if obj.type == 'MESH']
+
+bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0,0,0))
+parent_empty = bpy.context.active_object
+for obj in meshes:
+    obj.parent = parent_empty
+parent_empty.scale = (SCALE, SCALE, SCALE)
+
+# Bounding box
+all_coords = []
+for obj in meshes:
+    for v in obj.bound_box:
+        coord = obj.matrix_world @ Vector(v)
+        all_coords.append(coord)
+
+min_x = min(v.x for v in all_coords)
+max_x = max(v.x for v in all_coords)
+min_y = min(v.y for v in all_coords)
+max_y = max(v.y for v in all_coords)
+min_z = min(v.z for v in all_coords)
+max_z = max(v.z for v in all_coords)
+
+center = ((min_x+max_x)/2, (min_y+max_y)/2, (min_z+max_z)/2)
+max_dim = max(max_x-min_x, max_y-min_y, max_z-min_z)
+
+parent_empty.location.z -= max_dim * CAR_LOWER
+
+# Camera
+dist = max_dim * 15
+bpy.ops.object.camera_add(location=(0, -dist, center[2] + max_dim * CAMERA_HEIGHT))
+cam = bpy.context.active_object
+scn.camera = cam
+
+bpy.ops.object.empty_add(type='PLAIN_AXES', location=center)
+target = bpy.context.active_object
+con = cam.constraints.new(type='TRACK_TO')
+con.target = target
+con.track_axis = 'TRACK_NEGATIVE_Z'
+con.up_axis = 'UP_Y'
+
+# ---------------- LIGHTS ----------------
+# Sun + base lights (keep from V3)
+bpy.ops.object.light_add(type='SUN', location=(dist, -dist, dist))
+bpy.data.objects["Sun"].data.energy = 5
+
+# ✅ Neon underglow
+bpy.ops.object.light_add(type='POINT', location=(0, 0, min_z - max_dim * 0.3))
+neon = bpy.context.active_object
+neon.data.energy = 20000
+neon.data.color = (0.0, 0.5, 1.0)   # cyan-blue glow
+neon.data.shadow_soft_size = max_dim
+
+# ✅ Rim light (magenta from behind)
+bpy.ops.object.light_add(type='POINT', location=(0, max_y + max_dim*1.5, center[2] + max_dim * 0.8))
+rim = bpy.context.active_object
+rim.data.energy = 8000
+rim.data.color = (1.0, 0.0, 0.6)    # magenta
+rim.data.shadow_soft_size = max_dim
+
+# Ambient Occlusion
+scn.eevee.use_gtao = True
+scn.eevee.gtao_distance = 1.5
+scn.eevee.gtao_quality = 1.2
+
+# -----------------------------------------
+
+# Animate camera orbit
+for f in range(1, NUM_FRAMES+1):
+    angle = (f-1) / NUM_FRAMES * 2 * math.pi
+    cam.location.x = math.sin(angle) * dist
+    cam.location.y = math.cos(angle) * dist
+    cam.location.z = center[2] + max_dim * CAMERA_HEIGHT
+    cam.keyframe_insert(data_path="location", frame=f)
+
+# Render animation
+bpy.ops.render.render(animation=True)
+print("✅ Test render complete → frames saved in:", OUT_DIR)
