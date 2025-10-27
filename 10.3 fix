@@ -1,13 +1,10 @@
-# Cyberpunk Dashboard – PCB v7.5
-# Fix: civic GIF visible and looping in bottom-left widget (no ghosting)
+# Cyberpunk Dashboard – PCB v10 (no-ghost civic via PNG frames)
+# Same visuals/lines/grid/sensors; only the civic playback method changed.
 
-import sys, os, random, datetime
+import sys, os, glob, random, datetime
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QGraphicsDropShadowEffect
 from PyQt5.QtCore import Qt, QTimer, QPointF, QRect
-from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPainterPath, QMovie, QPixmap  # +QPixmap
-from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-from PyQt5.QtMultimediaWidgets import QVideoWidget
-from PyQt5.QtCore import QUrl
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPainterPath, QMovie, QPixmap
 
 # ───────────────────────────────────────────────
 # SETTINGS
@@ -29,8 +26,8 @@ BUS_OFFS = [-20, -10, 10, 20]
 SPINE_OFFS = [-34, -32, 34, 36]
 BRANCH_OFFSETS = [-13, 13]
 
-# Path to your spinning Civic GIF
-CIVIC_GIF = "/home/matteo94/Desktop/cd/civic_spin_fixed.gif"
+# Path to frames directory (exported from your MP4 once with ffmpeg)
+CIVIC_FRAMES_DIR = os.path.join(os.path.dirname(__file__), "civic_frames")  # contains frame_001.png, etc.
 
 # ───────────────────────────────────────────────
 # Glow + Paint helpers
@@ -63,6 +60,57 @@ def ortho_path(points):
     for x, y in points[1:]:
         path.lineTo(QPointF(x, y))
     return path
+
+# ───────────────────────────────────────────────
+# Opaque PNG frame player (no ghosting)
+# ───────────────────────────────────────────────
+class FramePlayerWidget(QLabel):
+    """Lightweight player that cycles PNG frames at a fixed FPS (opaque, no trails)."""
+    def __init__(self, parent=None, fps=30):
+        super().__init__(parent)
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("background-color:#0d0d0d;")
+        self.frames = []
+        self.idx = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._next)
+        self.interval = int(1000 / max(1, fps))
+
+    def load_dir(self, dir_path):
+        files = sorted(glob.glob(os.path.join(dir_path, "frame_*.png")))
+        self.frames = [QPixmap(f) for f in files]
+        self.idx = 0
+        if self.frames:
+            self._paint_current()
+
+    def start(self):
+        if self.frames:
+            self.timer.start(self.interval)
+
+    def stop(self):
+        self.timer.stop()
+
+    def _paint_current(self):
+        if not self.frames:
+            return
+        size = self.size()
+        canvas = QPixmap(size)
+        canvas.fill(QColor("#0d0d0d"))
+        frame = self.frames[self.idx].scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        x = (size.width()  - frame.width())  // 2
+        y = (size.height() - frame.height()) // 2
+        p = QPainter(canvas); p.drawPixmap(x, y, frame); p.end()
+        self.setPixmap(canvas)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._paint_current()
+
+    def _next(self):
+        if not self.frames:
+            return
+        self.idx = (self.idx + 1) % len(self.frames)
+        self._paint_current()
 
 # ───────────────────────────────────────────────
 # Widget class
@@ -111,50 +159,25 @@ class GlowWidget(QWidget):
         self.label.show()
         self.label.setText(html)
 
-    # ── FIXED: no-ghosting GIF renderer ──────────────────────────────────────
+    # (Kept for compatibility; unused now)
     def setMovie(self, gif_path):
-        """Show animated GIF with opaque compositing to avoid ghosting."""
         if not os.path.exists(gif_path):
             print(f"[!] GIF not found at {gif_path}")
             return
-
         if self.movie_label is None:
             self.movie_label = QLabel(self)
+            self.movie_label.setAttribute(Qt.WA_TranslucentBackground)
+            self.movie_label.setStyleSheet("background:transparent;")
             self.movie_label.lower()
-
-        # Opaque background so previous frames never bleed through
-        self.movie_label.setAutoFillBackground(True)
-        self.movie_label.setStyleSheet("background-color:#0d0d0d;")  # same as window bg
-        self.movie_label.setAttribute(Qt.WA_OpaquePaintEvent, True)
-        self.movie_label.setAttribute(Qt.WA_NoSystemBackground, False)
-        self.movie_label.setGeometry(self._inner_rect())
-
         self.movie = QMovie(gif_path)
         self.movie.setCacheMode(QMovie.CacheAll)
         self.movie.setSpeed(100)
-        # Draw each frame onto a fresh opaque pixmap
-        self.movie.frameChanged.connect(self._on_frame)
+        self.movie.setScaledSize(self._inner_rect().size())
+        self.movie_label.setGeometry(self._inner_rect())
+        self.movie_label.setMovie(self.movie)
         self.movie.start()
+        self.movie_label.show()
         self.label.hide()
-        print("[✓] Loaded and started GIF:", gif_path)
-
-    def _on_frame(self, _index):
-        frame = self.movie.currentPixmap()
-        size = self._inner_rect().size()
-        canvas = QPixmap(size)
-        canvas.fill(QColor("#0d0d0d"))  # opaque canvas
-
-        # Fit while keeping aspect and use smooth scaling
-        frame = frame.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        x = (size.width()  - frame.width())  // 2
-        y = (size.height() - frame.height()) // 2
-
-        p = QPainter(canvas)
-        p.drawPixmap(x, y, frame)
-        p.end()
-
-        self.movie_label.setPixmap(canvas)
-    # ─────────────────────────────────────────────────────────────────────────
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -173,7 +196,7 @@ class GlowWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Cyberpunk Dashboard – PCB v8.3")
+        self.setWindowTitle("Cyberpunk Dashboard – PCB v10")
         self.setFixedSize(640, 480)
         self.setStyleSheet("background-color:#0d0d0d;")
 
@@ -185,7 +208,7 @@ class MainWindow(QMainWindow):
         # animate grid
         self.grid_timer = QTimer(self)
         self.grid_timer.timeout.connect(self.animate_grid)
-        self.grid_timer.start(40)  # smooth motion
+        self.grid_timer.start(40)
 
         # ────────── widgets ──────────
         self.top_left = self._mk(LEFT_X, TOP_Y, big=True)
@@ -194,10 +217,14 @@ class MainWindow(QMainWindow):
         self.bottom_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W,
                                      self.height()-BOTTOM_Y_GAP-WIDGET_H)
 
-        # Attach GIF
-        self.bottom_left.setMovie(CIVIC_GIF)
+        # Attach PNG frame player in bottom-left (replaces old GIF)
+        inner = self.bottom_left._inner_rect()
+        self.video_label = FramePlayerWidget(self.bottom_left, fps=30)
+        self.video_label.setGeometry(inner)
+        self.video_label.load_dir(CIVIC_FRAMES_DIR)
+        self.video_label.start()
 
-        # DHT22 support (unchanged)
+        # DHT availability (unchanged)
         try:
             import Adafruit_DHT
             self.SENSOR_AVAILABLE = True
@@ -248,7 +275,6 @@ class MainWindow(QMainWindow):
             self.bottom_right.setText(f"Inside:\n{H:.1f} %")
 
     def animate_grid(self):
-        # move diagonally (slower)
         self.grid_offset_x += 0.5
         self.grid_offset_y += 0.5
         self.update()
@@ -258,7 +284,7 @@ class MainWindow(QMainWindow):
         p.setRenderHint(QPainter.Antialiasing)
 
         # ────── continuous background grid (darker) ──────
-        grid_color = QColor(40, 40, 40, 120)  # darker gray
+        grid_color = QColor(40, 40, 40, 120)
         pen = QPen(grid_color)
         pen.setWidth(1)
         p.setPen(pen)
@@ -267,12 +293,9 @@ class MainWindow(QMainWindow):
         ox = self.grid_offset_x
         oy = self.grid_offset_y
 
-        # draw vertical lines across window
         for x in range(-step*2, self.width() + step*2, step):
             px = int(x + (ox % step))
             p.drawLine(px, 0, px, self.height())
-
-        # draw horizontal lines across window
         for y in range(-step*2, self.height() + step*2, step):
             py = int(y + (oy % step))
             p.drawLine(0, py, self.width(), py)
