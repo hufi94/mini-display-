@@ -1,0 +1,396 @@
+# Cyberpunk Dashboard – PCB v10.2 (transparent Civic, animated grid, DHT helper)
+
+import sys, os, random, datetime, glob
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QGraphicsDropShadowEffect
+from PyQt5.QtCore import Qt, QTimer, QPointF
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPainterPath, QImage, QPixmap
+
+# ───────────────────────────────────────────────
+# SETTINGS
+# ───────────────────────────────────────────────
+WIDGET_W, WIDGET_H = 250, 160
+LEFT_X, RIGHT_X_GAP = 40, 40
+TOP_Y, BOTTOM_Y_GAP = 50, 50
+
+CYAN = QColor("#00ffff")
+PINK = QColor("#ff00ff")
+BORDER_WIDTH = 4
+RADIUS = 30
+PADDING = 8
+CORE = 3
+
+BUS_OFFS = [-20, -10, 10, 20]
+SPINE_OFFS = [-34, -32, 34, 36]
+BRANCH_OFFSETS = [-13, 13]
+
+# Path to Civic PNG frames (with transparency)
+FRAMES_DIR = "/home/matteo94/Desktop/cd/civic_frames_alpha"
+
+# ───────────────────────────────────────────────
+# Glow + Paint helpers
+# ───────────────────────────────────────────────
+def neon_stroke(p, path, color, core_width):
+    c1 = QColor(color); c1.setAlpha(60)
+    c2 = QColor(color); c2.setAlpha(120)
+    c3 = QColor(color); c3.setAlpha(255)
+    for w, col in ((core_width*3, c1),
+                   (int(core_width*1.7), c2),
+                   (core_width, c3)):
+        pen = QPen(col)
+        pen.setWidth(w)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawPath(path)
+
+def neon_dot(p, pos, color, radius):
+    c1 = QColor(color); c1.setAlpha(60)
+    c2 = QColor(color); c2.setAlpha(120)
+    c3 = QColor(color); c3.setAlpha(255)
+    for r, col in ((radius*2, c1), (int(radius*1.5), c2), (radius, c3)):
+        p.setBrush(col)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(pos, r, r)
+
+def ortho_path(points):
+    path = QPainterPath(QPointF(points[0][0], points[0][1]))
+    for x, y in points[1:]:
+        path.lineTo(QPointF(x, y))
+    return path
+
+# ───────────────────────────────────────────────
+# Transparent Civic Frame Player
+# ───────────────────────────────────────────────
+class FramePlayerWidget(QLabel):
+    """Plays PNG frames with real alpha (no ghosting, transparent background)."""
+    def __init__(self, parent=None, fps=30):
+        super().__init__(parent)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setStyleSheet("background: transparent;")
+        self.frames = []
+        self.idx = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._next)
+        self.interval = int(1000 / max(1, fps))
+
+    def load_dir(self, dir_path):
+        files = sorted(glob.glob(os.path.join(dir_path, "*.png")))
+        self.frames = [
+            QImage(f).convertToFormat(QImage.Format_ARGB32_Premultiplied)
+            for f in files
+        ]
+        print(f"[CIVIC] Loaded {len(self.frames)} frames from: {dir_path}")
+        self.idx = 0
+        if self.frames:
+            self._paint_current()
+        else:
+            self.setText("No frames found")
+
+    def start(self):
+        if self.frames:
+            self.timer.start(self.interval)
+
+    def stop(self):
+        self.timer.stop()
+
+    def _paint_current(self):
+        if not self.frames:
+            return
+        size = self.size()
+        canvas = QImage(size, QImage.Format_ARGB32_Premultiplied)
+        canvas.fill(Qt.transparent)
+
+        frame = self.frames[self.idx].scaled(
+            size, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        x = (size.width()  - frame.width())  // 2
+        y = (size.height() - frame.height()) // 2
+
+        p = QPainter(canvas)
+        p.setCompositionMode(QPainter.CompositionMode_Source)
+        p.drawImage(x, y, frame)
+        p.end()
+
+        self.setPixmap(QPixmap.fromImage(canvas))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._paint_current()
+
+    def _next(self):
+        if not self.frames:
+            return
+        self.idx = (self.idx + 1) % len(self.frames)
+        self._paint_current()
+
+# ───────────────────────────────────────────────
+# Widget class
+# ───────────────────────────────────────────────
+class GlowWidget(QWidget):
+    def __init__(self, text="", parent=None, big=False):
+        super().__init__(parent)
+        self.setFixedSize(WIDGET_W, WIDGET_H)
+        self.big = big
+
+        # Text label
+        self.label = QLabel(text, self)
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setStyleSheet("color:#ff00ff; background:transparent;")
+        size = 30 if big else 23
+        font = QFont("Neuropolitical", size, QFont.Bold)
+        if font.family() == "Sans Serif":
+            font = QFont("Courier New", size, QFont.Bold)
+        self.label.setFont(font)
+        self.label.resize(self.size())
+
+        # Cyan border glow
+        border_glow = QGraphicsDropShadowEffect(self)
+        border_glow.setBlurRadius(80)
+        border_glow.setColor(CYAN)
+        border_glow.setOffset(0, 0)
+        self.setGraphicsEffect(border_glow)
+
+        # Reduced pink text glow
+        text_glow = QGraphicsDropShadowEffect(self.label)
+        text_glow.setBlurRadius(15)
+        glow_color = QColor(PINK); glow_color.setAlpha(30)
+        text_glow.setColor(glow_color)
+        text_glow.setOffset(0, 0)
+        self.label.setGraphicsEffect(text_glow)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def _inner_rect(self):
+        return self.rect().adjusted(22, 22, -22, -22)
+
+    def setText(self, html):
+        self.label.setText(html)
+        self.label.show()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(CYAN); pen.setWidth(BORDER_WIDTH)
+        p.setPen(pen)
+        p.drawRoundedRect(self.rect().adjusted(4, 4, -4, -4), RADIUS, RADIUS)
+        faint = QColor(CYAN); faint.setAlpha(60)
+        p.setPen(QPen(faint, 2))
+        p.drawRoundedRect(self._inner_rect(), RADIUS-10, RADIUS-10)
+        p.end()
+
+# ───────────────────────────────────────────────
+# DHT22 reader (legacy → CircuitPython → simulated)
+# ───────────────────────────────────────────────
+def read_dht22():
+    # Legacy
+    try:
+        import Adafruit_DHT
+        h, t = Adafruit_DHT.read_retry(Adafruit_DHT.DHT22, 4)
+        if h is not None and t is not None:
+            return round(t, 1), round(h, 1)
+    except Exception:
+        pass
+    # CircuitPython
+    try:
+        import adafruit_dht, board, time
+        dht = adafruit_dht.DHT22(board.D4)
+        time.sleep(0.8)
+        t, h = dht.temperature, dht.humidity
+        try: dht.exit()
+        except Exception: pass
+        if h is not None and t is not None:
+            return round(t, 1), round(h, 1)
+    except Exception:
+        pass
+    # Fallback
+    return round(21 + 4*random.random(), 1), round(45 + 10*random.random(), 1)
+
+# ───────────────────────────────────────────────
+# Main Window
+# ───────────────────────────────────────────────
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Cyberpunk Dashboard – PCB v10.2")
+        self.setFixedSize(640, 480)
+        self.setStyleSheet("background-color:#0d0d0d;")  # keep the dark base
+
+        # grid state
+        self.grid_step = 40
+        self.grid_offset_x = 0.0
+        self.grid_offset_y = 0.0
+
+        # grid timer → animate_grid (not update)
+        self.grid_timer = QTimer(self)
+        self.grid_timer.timeout.connect(self.animate_grid)
+        self.grid_timer.start(40)  # smooth motion
+
+        # widgets
+        self.top_left = self._mk(LEFT_X, TOP_Y, big=True)
+        self.top_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W, TOP_Y)
+        self.bottom_left = self._mk(LEFT_X, self.height()-BOTTOM_Y_GAP-WIDGET_H)
+        self.bottom_right = self._mk(self.width()-RIGHT_X_GAP-WIDGET_W,
+                                     self.height()-BOTTOM_Y_GAP-WIDGET_H)
+
+        # Civic animation (transparent, no ghosting)
+        self.civic_player = FramePlayerWidget(self.bottom_left, fps=30)
+        inner = self.bottom_left._inner_rect()
+        self.civic_player.setGeometry(inner)
+        self.civic_player.load_dir(FRAMES_DIR)
+        self.civic_player.start()
+        self.bottom_left.label.hide()   # prevent label from covering the player
+        self.civic_player.raise_()      # ensure player is on top
+
+        # Sensors & Time
+        try:
+            import Adafruit_DHT
+            self.SENSOR_AVAILABLE = True
+            self.sensor_type = Adafruit_DHT.DHT22
+            self.sensor_pin = 4
+            self.Adafruit_DHT = Adafruit_DHT
+        except ImportError:
+            self.SENSOR_AVAILABLE = False
+
+        self.t_timer = QTimer(self)
+        self.t_timer.timeout.connect(self.update_time)
+        self.t_timer.start(1000)
+
+        self.s_timer = QTimer(self)
+        self.s_timer.timeout.connect(self.update_sensors)
+        self.s_timer.start(10000)
+
+        self.update_time()
+        self.update_sensors()
+
+    def _mk(self, x, y, big=False):
+        w = GlowWidget("", self, big=big)
+        w.move(x, y)
+        return w
+
+    def update_time(self):
+        now = datetime.datetime.now()
+        t = now.strftime("%H:%M")
+        d = now.strftime("%d-%m-%Y")
+        self.top_left.setText(
+            f"<span style='font-size:30pt'>{t}</span><br>"
+            f"<span style='font-size:14pt'>{d}</span>"
+        )
+
+    def update_sensors(self):
+        if getattr(self, "SENSOR_AVAILABLE", False):
+            h, T = self.Adafruit_DHT.read_retry(self.sensor_type, self.sensor_pin)
+            if h is None or T is None:
+                self.top_right.setText("Temp:\n-- °C")
+                self.bottom_right.setText("Humidity:\n-- %")
+            else:
+                self.top_right.setText(f"Temp:\n{T:.1f} °C")
+                self.bottom_right.setText(f"Humidity:\n{h:.1f} %")
+        else:
+            T, H = read_dht22()
+            self.top_right.setText(f"Outside:\n{T:.1f} °C")
+            self.bottom_right.setText(f"Inside:\n{H:.1f} %")
+
+    def animate_grid(self):
+        self.grid_offset_x += 0.5
+        self.grid_offset_y += 0.5
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        grid_color = QColor(40, 40, 40, 120)  # darker grid
+        pen = QPen(grid_color); pen.setWidth(1)
+        p.setPen(pen)
+
+        step = self.grid_step
+        ox, oy = self.grid_offset_x, self.grid_offset_y
+
+        for x in range(-step*2, self.width() + step*2, step):
+            p.drawLine(int(x + (ox % step)), 0, int(x + (ox % step)), self.height())
+        for y in range(-step*2, self.height() + step*2, step):
+            p.drawLine(0, int(y + (oy % step)), self.width(), int(y + (oy % step)))
+
+        # Neon PCB overlays (unchanged)
+        TL, TR, BL, BR = (
+            self.top_left.geometry(),
+            self.top_right.geometry(),
+            self.bottom_left.geometry(),
+            self.bottom_right.geometry(),
+        )
+
+        mid_x = (TL.right() + TR.left()) // 2
+        top_bus_y, bot_bus_y = TL.center().y(), BL.center().y()
+        tl_r, tr_l = (TL.right() + PADDING, TL.center().y()), (TR.left() - PADDING, TR.center().y())
+        bl_r, br_l = (BL.right() + PADDING, BL.center().y()), (BR.left() - PADDING, BR.center().y())
+
+        # Buses
+        for o in BUS_OFFS:
+            y = top_bus_y + o
+            path = ortho_path([(tl_r[0], y), (mid_x - 28, y), (mid_x - 28, y + 12),
+                               (mid_x - 12, y + 12), (mid_x - 12, y), (tr_l[0], y)])
+            neon_stroke(p, path, CYAN, CORE)
+        for o in BUS_OFFS:
+            y = bot_bus_y + o
+            path = ortho_path([(bl_r[0], y), (mid_x + 28, y), (mid_x + 28, y - 12),
+                               (mid_x + 12, y - 12), (mid_x + 12, y), (br_l[0], y)])
+            neon_stroke(p, path, CYAN, CORE)
+
+        # Spines
+        mid_gap_top = TL.bottom() + PADDING - 40
+        mid_gap_bot = BR.top() - PADDING + 40
+        for o in SPINE_OFFS:
+            x = mid_x + o
+            path = ortho_path([
+                (x, mid_gap_top),
+                (x, (mid_gap_top + mid_gap_bot) // 2 - 27),
+                (x + 30, (mid_gap_top + mid_gap_bot) // 2 - 2),
+                (x, (mid_gap_top + mid_gap_bot) // 2 + 27),
+                (x, mid_gap_bot),
+            ])
+            neon_stroke(p, path, CYAN, max(1, CORE // 3))
+
+        # Left cyan traces
+        left_inner_x = TL.left() + 60
+        num_traces = 2
+        gap_top = TL.bottom() + 4
+        gap_bot = BL.top() - 4
+        gap_height = gap_bot - gap_top
+        spacing = max(1, gap_height // (num_traces + 1))
+        for i in range(num_traces):
+            y1 = gap_top + (i + 1) * spacing
+            y2 = gap_bot - (i + 1) * spacing
+            mid_y = (y1 + y2) // 2
+            jog = -40 if i % 2 == 0 else 40
+            path = ortho_path([(left_inner_x, y1), (left_inner_x + jog, mid_y), (left_inner_x, y2)])
+            width = CORE if i % 2 == 0 else max(1, CORE // 2)
+            neon_stroke(p, path, CYAN, width)
+
+        # Right cyan traces
+        right_x = TR.right() - 60
+        gap_top_r, gap_bot_r = TR.bottom(), BR.top()
+        center_y_r = (gap_top_r + gap_bot_r) // 2
+        path = ortho_path([(right_x, gap_top_r), (right_x, gap_bot_r)])
+        neon_stroke(p, path, CYAN, CORE)
+        for o in BRANCH_OFFSETS:
+            y = center_y_r + o
+            if gap_top_r < y < gap_bot_r:
+                path = ortho_path([(right_x, y), (right_x - 80, y)])
+                neon_stroke(p, path, CYAN, max(1, CORE // 2))
+                neon_dot(p, QPointF(right_x - 80, y), CYAN, 5)
+
+        # Bottom pink base lines
+        base_y = BR.bottom() + 18
+        for w in (1, 3):
+            path = ortho_path([(TL.left() + 20, base_y + 6 * w),
+                               (TR.right() - 40, base_y + 6 * w)])
+            neon_stroke(p, path, PINK, w)
+
+        p.end()
+
+# ───────────────────────────────────────────────
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec_())
