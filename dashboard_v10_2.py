@@ -179,6 +179,36 @@ class GlowWidget(QWidget):
         p.end()
 
 # ───────────────────────────────────────────────
+# Helper: DHT22 reader
+# ───────────────────────────────────────────────
+def read_dht22():
+    """Try legacy Adafruit_DHT, then CircuitPython; fallback to simulated values."""
+    # 1) Legacy (only if Adafruit_DHT is installed)
+    try:
+        import Adafruit_DHT
+        h, t = Adafruit_DHT.read_retry(Adafruit_DHT.DHT22, 4)  # GPIO4 (BCM)
+        if h is not None and t is not None:
+            return round(t, 1), round(h, 1)
+    except Exception:
+        pass
+
+    # 2) CircuitPython (Blinka/libgpiod3)
+    try:
+        import adafruit_dht, board, time
+        dht = adafruit_dht.DHT22(board.D4)
+        time.sleep(0.8)  # first read can be None
+        t, h = dht.temperature, dht.humidity
+        try: dht.exit()
+        except Exception: pass
+        if h is not None and t is not None:
+            return round(t, 1), round(h, 1)
+    except Exception:
+        pass
+
+    # 3) Fallback simulated values so the UI still runs
+    return round(21 + 4*random.random(), 1), round(45 + 10*random.random(), 1)
+
+# ───────────────────────────────────────────────
 # Main Window
 # ───────────────────────────────────────────────
 class MainWindow(QMainWindow):
@@ -247,35 +277,9 @@ class MainWindow(QMainWindow):
             f"<span style='font-size:14pt'>{d}</span>"
         )
 
-# DHT22 reader: try legacy, then CircuitPython, else simulate
-def read_dht22():
-    # 1) Legacy (only if Adafruit_DHT is installed)
-    try:
-        import Adafruit_DHT
-        h, t = Adafruit_DHT.read_retry(Adafruit_DHT.DHT22, 4)  # GPIO4 (BCM)
-        if h is not None and t is not None:
-            return round(t, 1), round(h, 1)
-    except Exception:
-        pass
-
-    # 2) CircuitPython (Blinka/libgpiod3)
-    try:
-        import adafruit_dht, board, time
-        dht = adafruit_dht.DHT22(board.D4)
-        time.sleep(0.8)  # first read can be None
-        t, h = dht.temperature, dht.humidity
-        try: dht.exit()
-        except Exception: pass
-        if h is not None and t is not None:
-            return round(t, 1), round(h, 1)
-    except Exception:
-        pass
-
-    # 3) Fallback simulated values so the UI still runs
-    import random
-    return round(21 + 4*random.random(), 1), round(45 + 10*random.random(), 1)
-
+    # ── FIXED: these methods belong to MainWindow ───────────────────────
     def update_sensors(self):
+        """Update sensor widgets; uses legacy Adafruit_DHT if present, else helper."""
         if getattr(self, "SENSOR_AVAILABLE", False):
             h, T = self.Adafruit_DHT.read_retry(self.sensor_type, self.sensor_pin)
             if h is None or T is None:
@@ -285,8 +289,7 @@ def read_dht22():
                 self.top_right.setText(f"Temp:\n{T:.1f} °C")
                 self.bottom_right.setText(f"Humidity:\n{h:.1f} %")
         else:
-            T = random.uniform(18, 24)
-            H = random.uniform(40, 60)
+            T, H = read_dht22()  # uses CircuitPython or simulated fallback
             self.top_right.setText(f"Outside:\n{T:.1f} °C")
             self.bottom_right.setText(f"Inside:\n{H:.1f} %")
 
