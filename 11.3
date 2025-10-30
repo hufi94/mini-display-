@@ -1,0 +1,334 @@
+# Cyberpunk Dashboard – PCB v10.5.4 (FULL, trimmed-right fix)
+# Changes vs your last file:
+# - Add SAFE_RIGHT + VAL_RIGHT_PAD to keep numbers away from right border.
+# - Value labels get right contents margin.
+# - Pink underline width respects the right safety gap.
+# Everything else unchanged.
+
+import sys, os, random, datetime, glob
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QGraphicsDropShadowEffect
+from PyQt5.QtCore import Qt, QTimer, QPointF
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPainterPath, QImage, QPixmap
+
+# ───────────────── Settings
+WIDGET_W, WIDGET_H = 270, 170
+EDGE_MARGIN_X, EDGE_MARGIN_Y = 21, 29
+CYAN  = QColor("#00ffff")
+PINK  = QColor("#ff00ff")
+BORDER_WIDTH, RADIUS, PADDING, CORE = 6, 30, 8, 3
+BUS_OFFS       = [-20, -10, 10, 20]
+SPINE_OFFS     = [-34, -32, 34, 36]
+BRANCH_OFFSETS = [-13, 13]
+FRAMES_DIR = "/home/matteo94/Desktop/cd/civic_frames_alpha"
+
+# ── Easy knobs (top-right)
+LABEL_COL_W     = 130   # fixed width for "Inside:/Outside:"
+LABEL_VAL_GAP   = 44    # extra visual spacing between text and numbers
+VALUE_FONT_SIZE = 24    # number font size
+LINE_THICK      = 3
+LINE_GLOW       = 20
+
+# NEW: keep values away from the rounded border and add inner padding
+SAFE_RIGHT      = -18   # safety pixels reserved at the far right
+VAL_RIGHT_PAD   = -30   # contents margin inside the value QLabel (right side)
+
+# ───────────────── Sensors
+class DualBME280:
+    def __init__(self):
+        self.inside = None; self.outside = None
+        try:
+            from adafruit_extended_bus import ExtendedI2C
+            import adafruit_bme280
+            i2c = ExtendedI2C(14)
+            try:
+                self.inside = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=0x76)
+                self.inside.sea_level_pressure = 1013.25
+            except Exception: pass
+            try:
+                self.outside = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=0x77)
+                self.outside.sea_level_pressure = 1013.25
+            except Exception: pass
+        except Exception as e:
+            print(f"[WARN] BME280 init failed: {e}")
+
+    def read(self):
+        def safe_read(s):
+            try: return round(s.temperature), round(s.humidity), round(s.pressure)
+            except Exception: return (None, None, None)
+        in_t = out_t = None
+        if self.inside:  in_t, *_  = safe_read(self.inside)
+        if self.outside: out_t, *_ = safe_read(self.outside)
+        if in_t is None and out_t is None:
+            in_t  = round(random.uniform(21, 25))
+            out_t = in_t - random.randint(0, 6)
+            return {"inside_temp": in_t, "outside_temp": out_t, "ok": False, "source": "DEMO"}
+        return {"inside_temp": in_t, "outside_temp": out_t, "ok": True, "source": "BME280"}
+
+# ───────────────── Paint helpers
+def neon_stroke(p, path, color, core_width):
+    c1 = QColor(color); c1.setAlpha(60)
+    c2 = QColor(color); c2.setAlpha(120)
+    c3 = QColor(color); c3.setAlpha(255)
+    for w, col in ((core_width*3, c1),(int(core_width*1.7), c2),(core_width, c3)):
+        pen = QPen(col); pen.setWidth(w); pen.setCapStyle(Qt.RoundCap); pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen); p.drawPath(path)
+
+def neon_dot(p, pos, color, radius):
+    for a, s in ((60,2),(120,1.5),(255,1)):
+        c = QColor(color); c.setAlpha(a)
+        p.setBrush(c); p.setPen(Qt.NoPen); p.drawEllipse(pos, radius*s, radius*s)
+
+def ortho_path(points):
+    path = QPainterPath(QPointF(points[0][0], points[0][1]))
+    for x, y in points[1:]: path.lineTo(QPointF(x, y))
+    return path
+
+# ───────────────── Civic frame player
+class FramePlayerWidget(QLabel):
+    def __init__(self, parent=None, fps=25):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setStyleSheet("background: transparent;")
+        self.frames = []; self.idx = 0
+        self.timer = QTimer(self); self.timer.timeout.connect(self._next)
+        self.interval = int(1000 / max(1, fps))
+
+    def load_dir(self, dir_path):
+        files = sorted(glob.glob(os.path.join(dir_path, "*.png")))
+        self.frames = [QImage(f).convertToFormat(QImage.Format_ARGB32_Premultiplied) for f in files]
+        print(f"[CIVIC] Loaded {len(self.frames)} frames from: {dir_path}")
+        self.idx = 0
+        if self.frames: self._paint_current()
+        else: self.setText("No frames found")
+
+    def start(self):
+        if self.frames: self.timer.start(self.interval)
+
+    def _paint_current(self):
+        if not self.frames: return
+        size = self.size()
+        canvas = QImage(size, QImage.Format_ARGB32_Premultiplied); canvas.fill(Qt.transparent)
+        frame = self.frames[self.idx].scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        x = (size.width() - frame.width()) // 2; y = (size.height() - frame.height()) // 2
+        p = QPainter(canvas); p.setCompositionMode(QPainter.CompositionMode_Source); p.drawImage(x, y, frame); p.end()
+        self.setPixmap(QPixmap.fromImage(canvas))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e); self._paint_current()
+
+    def _next(self):
+        if self.frames: self.idx = (self.idx + 1) % len(self.frames); self._paint_current()
+
+# ───────────────── Glow widget frame
+class GlowWidget(QWidget):
+    def __init__(self, text="", parent=None, big=False):
+        super().__init__(parent)
+        self.setFixedSize(WIDGET_W, WIDGET_H)
+        self.label = QLabel(text, self); self.label.setAlignment(Qt.AlignCenter)
+        self.label.setStyleSheet("color:#ff00ff; background:transparent;")
+        size = 30 if big else 23
+        font = QFont("Neuropolitical", size, QFont.Bold)
+        if font.family() == "Sans Serif": font = QFont("Courier New", size, QFont.Bold)
+        self.label.setFont(font); self.label.resize(self.size())
+        glow = QGraphicsDropShadowEffect(self); glow.setBlurRadius(200); glow.setColor(CYAN); glow.setOffset(2, 2)
+        self.setGraphicsEffect(glow); self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def setText(self, html): self.label.setText(html); self.label.show()
+    def _inner_rect(self):    return self.rect().adjusted(22, 22, -22, -22)
+
+    def paintEvent(self, _):
+        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(CYAN); pen.setWidth(BORDER_WIDTH); p.setPen(pen)
+        p.drawRoundedRect(self.rect().adjusted(4, 4, -4, -4), RADIUS, RADIUS); p.end()
+
+# ───────────────── Main window
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Cyberpunk Dashboard – PCB v10.5.4")
+        self.setFixedSize(640, 480)
+        self.setStyleSheet("background-color:#0d0d0d;")
+
+        # Grid
+        self.grid_step = 40; self.grid_offset_x = 0.5; self.grid_offset_y = 0.5
+        self.grid_timer = QTimer(self); self.grid_timer.timeout.connect(self.animate_grid); self.grid_timer.start(40)
+
+        # Frames
+        self.top_left  = self._mk(EDGE_MARGIN_X, EDGE_MARGIN_Y, big=True)
+        self.top_right = self._mk(self.width()-EDGE_MARGIN_X-WIDGET_W, EDGE_MARGIN_Y)
+        self.bottom_left  = self._mk(EDGE_MARGIN_X, self.height()-EDGE_MARGIN_Y-WIDGET_H)
+        self.bottom_right = self._mk(self.width()-EDGE_MARGIN_X-WIDGET_W, self.height()-EDGE_MARGIN_Y-WIDGET_H)
+
+        # Civic (bottom-left)
+        self.civic_player = FramePlayerWidget(self.bottom_left, fps=25)
+        w, h = self.bottom_left.width(), self.bottom_left.height(); margin = -7
+        self.civic_player.setGeometry(margin, margin, w-2*margin, h-2*margin)
+        self.civic_player.load_dir(FRAMES_DIR); self.civic_player.start()
+        self.bottom_left.label.hide(); self.civic_player.raise_()
+
+        # Sensors
+        self.sensors = DualBME280()
+
+        # Keep BR empty
+        self.bottom_right.label.clear(); self.bottom_right.label.hide()
+
+        # ── TOP-RIGHT: labels, values, underlines
+        self.top_right.label.hide()
+        self.tr_lab_font = QFont("Neuropolitical", 17, QFont.Bold)
+        if self.tr_lab_font.family() == "Sans Serif": self.tr_lab_font = QFont("Courier New", 17, QFont.Bold)
+        self.tr_val_font = QFont("Neuropolitical", VALUE_FONT_SIZE, QFont.Bold)
+        if self.tr_val_font.family() == "Sans Serif": self.tr_val_font = QFont("Courier New", VALUE_FONT_SIZE, QFont.Bold)
+
+        self.in_lab  = QLabel("Inside:",  self.top_right)
+        self.out_lab = QLabel("Outside:", self.top_right)
+        for lab in (self.in_lab, self.out_lab):
+            lab.setStyleSheet("background:transparent; color:#00ffff;")
+            lab.setFont(self.tr_lab_font)
+            lab.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        self.in_val  = QLabel("--°C", self.top_right)
+        self.out_val = QLabel("--°C", self.top_right)
+        for val in (self.in_val, self.out_val):
+            val.setStyleSheet("background:transparent; color:#ff00ff;")
+            val.setFont(self.tr_val_font)
+            val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            # NEW: give the value label a right contents margin
+            val.setContentsMargins(0, 0, VAL_RIGHT_PAD, 0)
+
+        self.line_inside  = QWidget(self.top_right)
+        self.line_outside = QWidget(self.top_right)
+        for bar in (self.line_inside, self.line_outside):
+            bar.setStyleSheet("background:#ff00ff;")
+            glow = QGraphicsDropShadowEffect(bar); glow.setBlurRadius(LINE_GLOW); glow.setColor(PINK); glow.setOffset(0,0)
+            bar.setGraphicsEffect(glow); bar.show(); bar.raise_()
+
+        # Timers
+        self.t_timer = QTimer(self); self.t_timer.timeout.connect(self.update_time); self.t_timer.start(1000)
+        self.s_timer = QTimer(self); self.s_timer.timeout.connect(self.update_sensors); self.s_timer.start(5000)
+        self.update_time(); self.update_sensors()
+
+    def _mk(self, x, y, big=False):
+        w = GlowWidget("", self, big=big); w.move(x, y); return w
+
+    # ── Layout: label gets fixed width, value gets ALL remaining space minus right safety gap
+    def _layout_top_right_rows(self):
+        inner = self.top_right._inner_rect()
+        x, y, w, h = inner.x(), inner.y(), inner.width(), inner.height()
+        gap  = 16
+        row_h = max(1, (h - gap) // 2)
+
+        # left/right padding inside the glowing frame
+        pad_left, pad_right = 10, 10
+        content_x = x + pad_left
+        content_w = max(0, w - (pad_left + pad_right))
+
+        lab_w = min(LABEL_COL_W + LABEL_VAL_GAP, content_w - 80)  # keep room for values
+        val_x = content_x + lab_w
+        # NEW: subtract SAFE_RIGHT from value span to avoid border collision
+        val_w = max(80, content_w - lab_w - SAFE_RIGHT)
+
+        # place rows
+        self.in_lab.setGeometry(content_x, y, lab_w, row_h)
+        self.in_val.setGeometry(val_x,     y, val_w, row_h)
+        self.out_lab.setGeometry(content_x, y + row_h + gap, lab_w, row_h)
+        self.out_val.setGeometry(val_x,     y + row_h + gap, val_w, row_h)
+
+        # pink underlines across the content width, respecting the right safety
+        bar_w = max(60, content_w - 12 - SAFE_RIGHT)
+        self.line_inside.setGeometry(content_x + 6, y + row_h - 6, bar_w, LINE_THICK)
+        self.line_outside.setGeometry(content_x + 6, y + row_h + gap + row_h - 6, bar_w, LINE_THICK)
+        self.line_inside.raise_(); self.line_outside.raise_()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e); self._layout_top_right_rows()
+
+    def update_time(self):
+        now = datetime.datetime.now()
+        t = now.strftime("%H:%M"); d = now.strftime("%d-%m-%Y")
+        self.top_left.setText(f"<span style='font-size:41pt'>{t}</span><br><span style='font-size:16pt'>{d}</span>")
+
+    def _render_top_right_rows(self, inside_text: str, outside_text: str):
+        self.in_val.setText(inside_text); self.out_val.setText(outside_text)
+        self._layout_top_right_rows()
+
+    def update_sensors(self):
+        d = self.sensors.read()
+        inside  = f"{d['inside_temp']}°C"  if d['inside_temp']  is not None else "--"
+        outside = f"{d['outside_temp']}°C" if d['outside_temp'] is not None else "--"
+        self._render_top_right_rows(inside, outside)
+        self.bottom_right.label.hide(); self.bottom_left.label.hide()
+        print(f"[{d['source']}] IN={inside} OUT={outside} ok={d['ok']}")
+
+    def animate_grid(self):
+        self.grid_offset_x += 0.5; self.grid_offset_y += 0.5; self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        # animated grid
+        grid_color = QColor(40, 40, 40, 120); pen = QPen(grid_color); pen.setWidth(1); p.setPen(pen)
+        step = 40; ox, oy = self.grid_offset_x, self.grid_offset_y
+        for x in range(-step*2, self.width() + step*2, step):
+            p.drawLine(int(x + (ox % step)), 0, int(x + (ox % step)), self.height())
+        for y in range(-step*2, self.height() + step*2, step):
+            p.drawLine(0, int(y + (oy % step)), self.width(), int(y + (oy % step)))
+
+        # PCB traces (unchanged)
+        TL, TR, BL, BR = (self.top_left.geometry(), self.top_right.geometry(),
+                          self.bottom_left.geometry(), self.bottom_right.geometry())
+
+        mid_x = (TL.right() + TR.left()) // 2
+        top_bus_y, bot_bus_y = TL.center().y(), BL.center().y()
+        tl_r, tr_l = (TL.right() + PADDING, TL.center().y()), (TR.left() - PADDING, TR.center().y())
+        bl_r, br_l = (BL.right() + PADDING, BL.center().y()), (BR.left() - PADDING, BR.center().y())
+
+        for o in BUS_OFFS:
+            y = top_bus_y + o
+            path = ortho_path([(tl_r[0], y), (mid_x - 28, y), (mid_x - 28, y + 12),
+                               (mid_x - 12, y + 12), (mid_x - 12, y), (tr_l[0], y)])
+            neon_stroke(p, path, CYAN, CORE)
+        for o in BUS_OFFS:
+            y = bot_bus_y + o
+            path = ortho_path([(bl_r[0], y), (mid_x + 28, y), (mid_x + 28, y - 12),
+                               (mid_x + 12, y - 12), (mid_x + 12, y), (br_l[0], y)])
+            neon_stroke(p, path, CYAN, CORE)
+
+        mid_gap_top = TL.bottom() + PADDING - 40
+        mid_gap_bot = BR.top() - PADDING + 40
+        for o in SPINE_OFFS:
+            x = mid_x + o
+            path = ortho_path([(x, mid_gap_top),
+                               (x, (mid_gap_top + mid_gap_bot) // 2 - 27),
+                               (x + 30, (mid_gap_top + mid_gap_bot) // 2 - 2),
+                               (x, (mid_gap_top + mid_gap_bot) // 2 + 27),
+                               (x, mid_gap_bot)])
+            neon_stroke(p, path, CYAN, max(1, CORE // 3))
+
+        left_inner_x = TL.left() + 70; num_traces = 2
+        gap_top = TL.bottom() + 4; gap_bot = BL.top() - 4
+        gap_height = gap_bot - gap_top; spacing = max(1, gap_height // (num_traces + 1))
+        for i in range(num_traces):
+            y1 = gap_top + (i + 1) * spacing; y2 = gap_bot - (i + 1) * spacing
+            mid_y = (y1 + y2) // 2; jog = -40 if i % 2 == 0 else 40
+            path = ortho_path([(left_inner_x, y1), (left_inner_x + jog, mid_y), (left_inner_x, y2)])
+            width = CORE if i % 2 == 0 else max(1, CORE // 2); neon_stroke(p, path, CYAN, width)
+
+        right_x = TR.right() - 60; gap_top_r, gap_bot_r = TR.bottom(), BR.top()
+        center_y_r = (gap_top_r + gap_bot_r) // 2
+        path = ortho_path([(right_x, gap_top_r), (right_x, gap_bot_r)]); neon_stroke(p, path, CYAN, CORE)
+        for o in BRANCH_OFFSETS:
+            y = center_y_r + o
+            if gap_top_r < y < gap_bot_r:
+                path = ortho_path([(right_x, y), (right_x - 80, y)]); neon_stroke(p, path, CYAN, max(1, CORE // 2))
+                neon_dot(p, QPointF(right_x - 80, y), CYAN, 5)
+
+        base_y = BR.bottom() + 4
+        for w in (1, 3):
+            path = ortho_path([(TL.left() + 20, base_y + 6 * w), (TR.right() - 40, base_y + 6 * w)])
+            neon_stroke(p, path, PINK, w)
+        p.end()
+
+# ───────────────── Run
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    win = MainWindow(); win.show()
+    sys.exit(app.exec_())
