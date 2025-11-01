@@ -214,6 +214,12 @@ class MainWindow(QMainWindow):
         self.civic_player.setGeometry(margin, margin, w-2*margin, h-2*margin)
         self.civic_player.load_dir(FRAMES_DIR); self.civic_player.start()
         self.bottom_left.label.hide(); self.civic_player.raise_()
+        
+        # Make only the Civic widget's glow pink (frame border stays cyan)
+        eff = self.bottom_left.graphicsEffect()
+        if isinstance(eff, QGraphicsDropShadowEffect):
+            eff.setColor(PINK)          # was CYAN in GlowWidget
+            eff.setBlurRadius(70)      # optional: a touch stronger glow
 
         # Sensors
         self.sensors = DualBME280()
