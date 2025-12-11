@@ -7,11 +7,17 @@
 
 import sys, os, random, datetime, glob, math
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QGraphicsDropShadowEffect
-from PyQt5.QtCore import Qt, QTimer, QPointF
+from PyQt5.QtCore import Qt, QTimer, QPointF, QRectF
 from PyQt5.QtGui import (
     QColor, QFont, QFontMetrics, QPainter, QPen, QPainterPath,
     QImage, QPixmap, QBrush, QLinearGradient
 )
+
+# ✅ psutil (CPU, RAM)
+try:
+    import psutil
+except Exception:
+    psutil = None
 
 # ✅ BME280 imports
 import board
@@ -294,8 +300,8 @@ class EqualizerWidget(QWidget):
 
         # Motion tuning (VU-ish)
         self.floor = 0.15
-        self.fast_rise = 1
-        self.slow_fall = 0.1
+        self.fast_rise = 1.5
+        self.slow_fall = 0.2
         self.noise_step = 0.12
         self.peak_decay = 0.050
         self.title_scale = 0.30
@@ -402,6 +408,176 @@ class EqualizerWidget(QWidget):
                 p, x, y, bar_w, bar_h, self.pink, self.cyan, vertical=True
             )
             x += bar_w + self.gap
+
+        p.end()
+
+# ───────────────── SystemStatusWidget (CPU / TEMP / RAM, green→red bars)
+class SystemStatusWidget(QWidget):
+    """
+    Bottom-left system widget (PAGE 1):
+      - CPU load %
+      - CPU temperature °C
+      - RAM usage %
+    Bars are rectangular, green at low values, blending toward red at high values.
+    Only text glows; no bar glow; transparent background.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        self.cpu_load = 0.0
+        self.cpu_temp = 0.0
+        self.ram_usage = 0.0
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_metrics)
+        self.timer.start(1000)
+        self.update_metrics()
+
+    # ── data helpers
+    def _read_cpu_temp(self):
+        if psutil is not None:
+            try:
+                temps = psutil.sensors_temperatures()
+                for _, entries in temps.items():
+                    if entries:
+                        return float(entries[0].current)
+            except Exception:
+                pass
+        try:
+            with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+                milli = float(f.read().strip())
+            return milli / 1000.0
+        except Exception:
+            return random.uniform(40, 65)
+
+    def update_metrics(self):
+        if psutil is not None:
+            try:
+                self.cpu_load = float(psutil.cpu_percent(interval=None))
+            except Exception:
+                self.cpu_load = random.uniform(5, 80)
+            try:
+                mem = psutil.virtual_memory()
+                self.ram_usage = float(mem.percent)
+            except Exception:
+                self.ram_usage = random.uniform(20, 90)
+        else:
+            self.cpu_load = random.uniform(5, 80)
+            self.ram_usage = random.uniform(20, 90)
+
+        self.cpu_temp = self._read_cpu_temp()
+        self.update()
+
+    # ── drawing helpers
+    def _lerp_color(self, c1: QColor, c2: QColor, t: float) -> QColor:
+        t = max(0.0, min(1.0, t))
+        r = c1.red()   + (c2.red()   - c1.red())   * t
+        g = c1.green() + (c2.green() - c1.green()) * t
+        b = c1.blue()  + (c2.blue()  - c1.blue())  * t
+        a = c1.alpha() + (c2.alpha() - c1.alpha()) * t
+        return QColor(int(r), int(g), int(b), int(a))
+
+        
+    def _draw_glow_text(self, p, x, y, w, h, text, base_color, font, align):
+        rect = QRectF(x, y, w, h)
+
+        # Softer glow (lighter alpha, smaller offset)
+        glow = QColor(base_color)
+        glow.setAlpha(70)  # lower intensity
+
+        p.setFont(font)
+        p.setPen(glow)
+
+        # Only 2-pixel soft blur instead of 4-direction bloom
+        for dx, dy in ((0, -1), (0, 1)):
+            r = rect.adjusted(dx, dy, dx, dy)
+            p.drawText(r, align, text)
+
+        # Crisp text
+        p.setPen(base_color)
+        p.drawText(rect, align, text)
+
+
+    def _draw_row(self, p, x, y, w, label, value_str, percent):
+        # fonts
+        label_font = QFont("Neuropolitical", 16, )
+        if label_font.family() == "Sans Serif":
+            label_font = QFont("Courier New", 14, )
+        value_font = QFont("Neuropolitical", 18, )
+        if value_font.family() == "Sans Serif":
+            value_font = QFont("Courier New", 18, )
+
+        text_h = 16
+        # glowing label
+        self._draw_glow_text(
+            p, x, y, w // 2, text_h, label, CYAN, label_font,
+            Qt.AlignLeft | Qt.AlignVCenter
+        )
+        # glowing value
+        self._draw_glow_text(
+            p, x + w // 2, y, w // 2, text_h, value_str, PINK, value_font,
+            Qt.AlignRight | Qt.AlignVCenter
+        )
+
+        # bar geometry
+        bar_y = y + 22
+        bar_h = 11
+        bar_margin = 2
+        bar_w = w
+        
+
+        # NO background strip anymore – pure transparent behind the bar
+
+        pct = max(0.0, min(100.0, percent)) / 100.0
+        fill_w = int(bar_w * pct)
+
+        if fill_w > 0:
+            green = QColor("#39FF14")
+            red   = QColor("#ff5555")
+            c_to = self._lerp_color(green, red, pct)
+            green.setAlpha(230)
+            c_to.setAlpha(230)
+
+            grad = QLinearGradient()
+            grad.setStart(x, bar_y)
+            grad.setFinalStop(x + fill_w, bar_y)
+            grad.setColorAt(0.0, green)
+            grad.setColorAt(1.0, c_to)
+
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(grad))
+            p.drawRoundedRect(
+                int(x + bar_margin),
+                int(bar_y + bar_margin),
+                max(0, fill_w - bar_margin * 2),
+                bar_h - bar_margin * 2,
+                2,2     
+            )
+
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        inner_x = 4
+        inner_y = 2
+        inner_w = self.width() - 1 * inner_x
+
+        # CPU load
+        self._draw_row(p, inner_x, inner_y, inner_w, "CPU", f"{self.cpu_load:4.0f}%", self.cpu_load)
+        
+
+        # CPU temp (normalize ~90°C)
+        mid_y = inner_y + 47
+        temp_pct = (self.cpu_temp / 90.0) * 100.0
+        self._draw_row(p, inner_x, mid_y, inner_w, "TEMP", f"{self.cpu_temp:4.0f}°C", temp_pct)
+        
+
+        # RAM
+        bot_y = mid_y + 47
+        self._draw_row(p, inner_x, bot_y, inner_w, "RAM", f"{self.ram_usage:4.0f}%", self.ram_usage)
+        
 
         p.end()
 
@@ -632,7 +808,7 @@ class MainWindow(QMainWindow):
         self.setCursor(Qt.BlankCursor)
 
         # ── Page / swipe state
-        self.current_page = 0        # 0 = main (temp), 1 = humidity/battery
+        self.current_page = 0        # 0 = main (temp), 1 = humidity/system/battery
         self._swipe_start_pos = None
         self._swipe_threshold = 80
         self.last_sensor = None
@@ -708,7 +884,7 @@ class MainWindow(QMainWindow):
         self.time_lbl.setFont(self.tl_time_font)
         self.date_lbl.setFont(self.tl_date_font)
 
-        # ── TOP-LEFT BATTERY WIDGET (DEMO, page 1 only) ────────────────────
+        # ── TOP-LEFT BATTERY WIDGET (DEMO, page 1 only)
         self.batt_volt_font = QFont("Neuropolitical", 33, QFont.Bold)
         if self.batt_volt_font.family() == "Sans Serif":
             self.batt_volt_font = QFont("Courier New", 33, QFont.Bold)
@@ -739,7 +915,6 @@ class MainWindow(QMainWindow):
         self.batt_timer = QTimer(self)
         self.batt_timer.timeout.connect(self.update_battery_demo)
         self.batt_timer.start(600)
-
         self.update_battery_demo()
 
         # Civic (bottom-left)
@@ -756,6 +931,13 @@ class MainWindow(QMainWindow):
         if isinstance(eff, QGraphicsDropShadowEffect):
             eff.setColor(PINK)
             eff.setBlurRadius(120)
+
+        # SystemStatusWidget in bottom-left (for PAGE 1)
+        self.system_widget = SystemStatusWidget(self.bottom_left)
+        inner_bl = self.bottom_left._inner_rect()
+        self.system_widget.setGeometry(inner_bl.x(), inner_bl.y(),
+                                       inner_bl.width(), inner_bl.height())
+        self.system_widget.hide()   # only shown on page 1
 
         # Sensors
         self.sensors = DualBME280()
@@ -925,17 +1107,20 @@ class MainWindow(QMainWindow):
     def set_page(self, page_index: int):
         """
         0 = main page → time/date + °C + civic + equalizer
-        1 = second page → battery + % humidity (civic/equalizer hidden)
+        1 = second page → battery + % humidity + system widget (bottom-left)
         """
         self.current_page = max(0, min(1, page_index))
 
         civic_eq_widgets = (self.civic_player, self.equalizer)
+
         if self.current_page == 0:
             for w in civic_eq_widgets:
                 w.show()
+            self.system_widget.hide()
         else:
             for w in civic_eq_widgets:
                 w.hide()
+            self.system_widget.show()
 
         # top-right always visible
         for w in (
